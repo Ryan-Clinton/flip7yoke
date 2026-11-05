@@ -219,7 +219,13 @@ body.board .player .total { font-size: 62px; grid-row: 1 / 4; grid-column: 4; mi
 body.board .player .sub { grid-column: 2 / 3; grid-row: 2; font-size: 19px; justify-content: flex-start; gap: 18px; }
 body.board .bar { grid-column: 2 / 4; grid-row: 3; height: 7px; margin-top: 4px; }
 body.board main { padding-bottom: 110px; }
-body.board .footer button { max-width: 900px; }
+/* keep the (backup) finish button under the scores column so the join QR codes stay clear */
+body.board .footer {
+  --edge: max(26px, calc((100vw - 1440px) / 2 + 26px));
+  left: var(--edge); right: calc(var(--edge) + 356px); padding-left: 0; padding-right: 0;
+  background: linear-gradient(transparent, rgba(19, 42, 116, .95) 40%);
+}
+body.board .footer button { max-width: none; }
 .joinPanel { position: sticky; top: 92px; text-align: center; }
 .joinPanel h3 { margin: 0; }
 .joinPanel .qrbox { background: var(--card-white); padding: 10px; border-radius: 10px; width: fit-content; margin: 8px auto; border: 2px solid var(--line); }
@@ -234,6 +240,7 @@ body.board .footer button { max-width: 900px; }
 
 @media (max-width: 800px) {
   body.board main { grid-template-columns: 1fr; }
+  body.board .footer { left: 0; right: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); }
   .joinPanel { position: static; }
 }
 @media (max-width: 420px) {
