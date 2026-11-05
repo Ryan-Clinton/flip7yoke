@@ -116,6 +116,85 @@ function scheduleAuto() {
   }
 }
 
+// ---- card reader: a local vision model in Ollama turns a photo of a hand into cards ----
+const OLLAMA = new URL(process.env.OLLAMA_URL || 'http://127.0.0.1:11434');
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5vl:7b';
+
+const CARD_GUIDE = {
+  classic: `Number cards show one big number from 0 to 12.
+Modifier cards show +2, +4, +6, +8, +10 or x2.
+Action cards: "Freeze", "Flip Three", "Second Chance".`,
+  vengeance: `Number cards show one big number from 0 to 13. The 0 card may say "The Zero".
+Special number cards: "Lucky 13" (a 13 with a lucky label) and "Unlucky 7" (a 7 with an unlucky label).
+Modifier cards show -2, -4, -6, -8, -10 or ÷2 (divide by two).
+Action cards: "Just One More", "Flip Four", "Discard", "Steal", "Swap".`,
+};
+const SCAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    numbers: { type: 'array', items: { type: 'integer' }, description: 'value of every number card, one entry per card, repeats included' },
+    modifiers: { type: 'array', items: { type: 'string' }, description: 'each modifier card exactly as printed, e.g. "+4", "-6", "x2", "÷2"' },
+    specials: { type: 'array', items: { type: 'string', enum: ['lucky13', 'unlucky7', 'second_chance'] } },
+  },
+  required: ['numbers', 'modifiers', 'specials'],
+};
+
+function ollamaChat(body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request({
+      hostname: OLLAMA.hostname, port: OLLAMA.port || 80, path: '/api/chat', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      timeout: 90000,
+    }, res => {
+      let out = '';
+      res.on('data', c => { out += c; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) return reject(new Error(`card reader said ${res.statusCode}: ${out.slice(0, 200)}`));
+        try { resolve(JSON.parse(out)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('card reader timed out')));
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+// Returns an entry-shaped hand. The phone shows it for checking before anything is saved.
+async function scanCards(imageB64) {
+  const V = Rules.isVengeance(state.mode);
+  const reply = await ollamaChat({
+    model: OLLAMA_MODEL,
+    stream: false,
+    format: SCAN_SCHEMA,
+    options: { temperature: 0 },
+    messages: [{
+      role: 'user',
+      images: [imageB64],
+      content: `This photo shows one player's hand from the card game Flip 7${V ? ' With a Vengeance' : ''}, laid out on a table.
+${CARD_GUIDE[V ? 'vengeance' : 'classic']}
+List every card you can see. Ignore action cards, card backs and anything that is not a card.
+Read the big number in the middle or corner of each card. Do not guess cards you cannot see.`,
+    }],
+  });
+  const got = JSON.parse(reply.message.content);
+  const hand = { cards: [], mods: [] };
+  const top = V ? 13 : 12;
+  for (const n of got.numbers || []) if (Number.isInteger(n) && n >= 0 && n <= top) hand.cards.push(n);
+  for (const raw of got.modifiers || []) {
+    const m = String(raw).replace(/\s/g, '').toLowerCase();
+    if (/^(x|×|\*)2$/.test(m)) { if (!V) hand.x2 = true; continue; }
+    if (/^(÷|\/|:)2$/.test(m)) { if (V) hand.half = true; continue; }
+    const v = Math.abs(parseInt(m.replace(/^[+−-]/, ''), 10));
+    if ([2, 4, 6, 8, 10].includes(v) && !hand.mods.includes(v)) hand.mods.push(v);
+  }
+  const sp = got.specials || [];
+  if (V && sp.includes('lucky13')) { hand.lucky = true; if (!hand.cards.includes(13)) hand.cards.push(13); }
+  if (V && sp.includes('unlucky7')) { hand.unlucky = true; if (!hand.cards.includes(7)) hand.cards.push(7); }
+  if (!V && sp.includes('second_chance')) hand.chance = true;
+  return hand;
+}
+
 function lanUrls() {
   return Object.values(os.networkInterfaces()).flat()
     .filter(i => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254'))
@@ -129,6 +208,24 @@ http.createServer((req, res) => {
     clients.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 25000);
     req.on('close', () => { clients.delete(res); clearInterval(ping); });
+    return;
+  }
+  if (req.url === '/api/scan' && req.method === 'POST') {
+    if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return res.writeHead(415).end();
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 4e6) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { image } = JSON.parse(body);
+        if (typeof image !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(image)) throw new Error('no photo');
+        const hand = await scanCards(image);
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(hand));
+      } catch (e) {
+        const down = /ECONNREFUSED|ENOTFOUND/.test(e.code || e.message);
+        res.writeHead(down ? 503 : 500, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ error: down ? "The card reader isn't running on the computer." : String(e.message).slice(0, 200) }));
+      }
+    });
     return;
   }
   if (req.url === '/api/info') {
