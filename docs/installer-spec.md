@@ -1,6 +1,6 @@
 # Flip7yoke installer: spec
 
-Status: planned. Written 5 Nov 2026; revised the same day after ChatGPT audit round 1 (audited commit `ac5e102`).
+Status: planned. Written 5 Nov 2026; revised the same day after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`).
 
 ## Goal
 
@@ -43,9 +43,11 @@ Today `save()` and `saveHistory()` in `server.js` call `fs.writeFile(..., () => 
 
 Replace both with one small writer, used for `state.json` and `history.json`:
 
-- **One write at a time per file.** If a save is requested while one is in flight, remember only the latest and write it next. The newest state always lands last.
-- **Atomic replace.** Write `state.json.tmp`, flush it, then rename it over `state.json`. Before the rename, keep the previous good file as `state.json.bak`.
-- **On start,** read `state.json`. If it's missing or won't parse, fall back to `state.json.bak` and log that it did.
+- **One write at a time per file.** If a save is requested while one is in flight, remember only the latest and write it next. The newest state always lands last. History archiving (`archiveGame()` on New game, and Delete history) goes through the same writer.
+- **Atomic replace.** Write `state.json.tmp` and flush it. Copy the current `state.json` to `state.json.bak`, then rename the `.tmp` over `state.json`.
+- **When Windows refuses the rename** (antivirus or a backup tool holding the file gives `EPERM` or `EBUSY`), retry up to 5 times over about a second. If it still fails, leave `state.json` and `state.json.bak` as they were, report a save error (below), and try again on the next save. The `.bak` is only replaced by a copy of a file that last saved successfully, so it's always a good one.
+- **Flush on exit.** `flush()` resolves when every queued write has finished, or rejects with the first error. A clean shutdown (Stage 3) awaits it before exiting and reports the result.
+- **On start,** read `state.json`. If it's missing or won't parse, fall back to `state.json.bak` and log that it did. A leftover `.tmp` is ignored and deleted.
 - **Errors are visible.** A failed write is logged with the reason and sets a `saveError` flag in `/api/status`. The board shows a small "Scores not saving: <reason>" banner, and the control window's status line shows it too. The flag clears on the next good write.
 
 ### Gameplay tests
@@ -55,7 +57,11 @@ Replace both with one small writer, used for `state.json` and `history.json`:
 - Scoring in all three modes from `public/rules.js`: the Zero (Vengeance round only, Brutal whole game), ÷2 rounding, Lucky 13, Flip 7 bonus, the floor at 0 outside Brutal.
 - Server actions against a temp data folder: join, duplicate names, submit and auto-finish a round, edit a score, remove a player, change mode, new game archives to history, delete a history entry, and state surviving a restart (including recovery from a damaged `state.json`).
 
-To make the actions testable, `server.js` exports its action handlers and only starts listening when run directly (`require.main === module`).
+To make the actions testable, `server.js` exports its action handlers and an explicit `start(options)` function. Loading it does nothing else: no listening, no timers, no reader check. Each entry point calls `start()` itself:
+
+- `run.js` (development) starts `server.js` as a child process, and `server.js` calls `start()` when `require.main === module`.
+- The packaged exe's bundle entry (Stage 3) calls `start()` directly, so it doesn't depend on how a SEA sets `require.main`.
+- The tests `require()` the file and call `start()` with a temp data folder and port 0, or call the actions without starting it.
 
 ### Card-reader check
 
@@ -161,7 +167,8 @@ Today `warmReader()` runs at start and retries every 15 seconds forever, whether
 
 - **`off`:** never contact Ollama.
 - **`auto` or `true`:** at start, check `/api/version` and `/api/tags`, then warm the model (`keep_alive: -1`). The check runs at most 5 times, 15 seconds apart, so Ollama starting just after us still works. After that it stops trying and reports the state.
-- **Re-check without restarting the game:** the control window's "Check card reader" button (or turning it on in Settings) runs the check again. A failed photo read with "can't reach the reader" also triggers one check.
+- **Health check while enabled:** every 30 seconds, `GET /api/version` (cheap, never loads the model). If it stops answering, the state goes to `no-ollama` and the camera hides. If it answers again, the full check runs (tags, then warm the model), and the state goes back to `ready`. While `off`, nothing runs.
+- **Re-check on demand:** the control window's "Check card reader" button (or turning it on in Settings) runs the full check immediately. A failed photo read with "can't reach the reader" also triggers one.
 - The phone page renders "📷 Snap my cards" only when the state is `ready`. It updates live through `/events`, so the button appears when the reader comes up mid-game.
 - Manual scoring never depends on the reader.
 
@@ -221,7 +228,9 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 - Builds an asset manifest from the files in `public/` (including each font). It replaces the `readdirSync` of `public/fonts`, and the `STATIC` allow-list is generated from it.
 - Writes `sea-config.json` with the bundle as `main` and every manifest file as an `asset`.
 
-**How the server reads its files.** One helper, `readPublic(name)`, returns `sea.getAsset(name)` when packaged and reads from disk when not.
+**How the server reads its files.** One helper, `readPublic(name)`, always returns a Node `Buffer`. When packaged it uses `Buffer.from(sea.getAsset(name))`, because `getAsset` returns an `ArrayBuffer`. When not packaged it reads from disk. Packaged detection is `require('node:sea').isSea()`.
+
+**Entry point.** The bundle ends with an explicit call: `--serve` runs `start()`, and no argument runs the supervisor. It never relies on `require.main`. The build's smoke test (step 7) catches an exe that starts and exits without listening.
 
 **Same scoring everywhere.** The browser's `/rules.js` is served from the same asset as the inlined copy. The build checks the two are byte-identical, so the server and phones can't drift apart.
 
@@ -241,18 +250,32 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 
 The control window is a remote control, not a babysitter. Closing it leaves the game running, as now.
 
-- **Crash restarts:** `Flip7yoke-server.exe` started normally acts as a small supervisor. It starts a second copy of itself with `--serve` and restarts it within about 2 seconds if it crashes, the same job `run.js` does in development. It gives up after 5 crashes in a minute and logs why. It stops when told to (see Stop), and never runs as a Windows service.
-- **The record of what's running:** on start, the supervisor writes `server.pid.json` to the data folder, holding its PID, process start time, exe path, port and a random instance token. `/api/status` returns the same token.
+- **Crash restarts:** `Flip7yoke-server.exe` started normally acts as a small supervisor. It starts a second copy of itself with `--serve` and restarts it within about 2 seconds if it crashes, the same job `run.js` does in development. It gives up after 5 crashes in a minute and logs why. It never runs as a Windows service.
+- **The supervisor owns stopping.** The child is spawned with an IPC channel (`stdio: ['ignore', out, out, 'ipc']`). Every intentional stop goes through the supervisor:
+  1. The supervisor sets "stopping", so no restart can happen from here on.
+  2. It sends the child `{ stop: true }` over IPC.
+  3. The child stops accepting actions, awaits `flush()`, replies `{ stopped: true, saved: true|false, error }`, and exits.
+  4. The supervisor writes the result to the log, deletes `server.pid.json`, and exits.
+
+  If the child hasn't exited 5 seconds after the request, the supervisor kills it. Any child exit while not "stopping" counts as a crash.
+- **Child never outlives the supervisor:** if the supervisor dies (killed, crashed), Node closes the IPC channel. The child sees `disconnect`, awaits `flush()`, and exits, which frees port 7777. On Windows a killed parent doesn't take its children with it, so this is how the child knows.
+- **The record of what's running:** on start, the supervisor writes `server.pid.json` to the data folder. It holds the supervisor PID, the child PID, each one's start time, the exe path, the ports, a random instance token and the supervisor's control port. `/api/status` returns the same token.
+- **Control channel:** the supervisor listens on `127.0.0.1` on a random port (recorded in `server.pid.json`) and accepts exactly one request, `POST /stop`, carrying the token. It answers once the stop above has finished, with the saved/error result.
 - **Is this ours?** The control window treats the server as running only if all of these hold:
   - The PID in `server.pid.json` exists.
   - Its start time and exe path match the record.
   - `/api/status` answers with the same token.
 
   A response on port 7777 with no matching token is someone else's program, and the status says "Port 7777 is in use by another program".
-- **Stop:** the control window calls `POST /api/shutdown` (loopback only, carrying the token), which saves and exits cleanly. If nothing has exited after 3 seconds, it stops the recorded supervisor PID, and only that PID. It deletes `server.pid.json`.
-- **One copy only:** Start does nothing if a valid record exists. A stale record (PID gone, or the PID now belongs to a different program) is deleted and Start carries on.
+- **Stop (control window):**
+  1. Call the supervisor's `POST /stop` and wait up to 10 seconds for its answer. If the answer reports `saved: false`, show "Last scores may not have saved: <error>".
+  2. If there's no answer, stop the recorded supervisor PID and child PID, each only after checking its start time and exe path still match the record.
+  3. Delete `server.pid.json` if it's still there.
+
+  There's no shutdown endpoint on the game server, so no phone can stop it.
+- **One copy only:** Start does nothing if a valid record exists. A stale record (PIDs gone, or now belonging to a different program) is deleted and Start carries on.
 - **Port taken:** if the main port is taken, the server exits with a clear message, and the control window shows it with a pointer to the Ports setting. If port 80 is taken, the server carries on with 7777, as now (`server.js` line 420).
-- **Development:** from the repo, `run.js` writes the same `server.pid.json`, so the control window works the same way in both setups. The command-line matching in `Get-FlipProcs` goes.
+- **Development:** from the repo, `run.js` is the supervisor. It writes the same `server.pid.json`, uses the same IPC stop and control channel, and keeps its file-watching restarts. A watch restart is a supervisor-initiated stop then start, not a crash. The control window works the same way in both setups, and the command-line matching in `Get-FlipProcs` goes.
 
 ### Same behaviour check
 
@@ -265,10 +288,15 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
 - **Per-user** (`PrivilegesRequired=lowest`), installing to `%LOCALAPPDATA%\Programs\Flip7yoke\`: `Flip7yoke-server.exe`, `Flip7yoke.ps1`, icon, `LICENSE`, third-party licences.
 - **Fixed `AppId`,** so a later installer recognises an existing install as an upgrade.
 - **Start menu shortcut,** plus a desktop shortcut as a ticked option. Both run `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<install>\Flip7yoke.ps1"`. `Bypass` applies to this one script only, so a normal machine policy doesn't block it; it doesn't change any system setting. Where Group Policy forbids PowerShell scripts outright, the control window won't open. The README says so, and the server can still be started by running `Flip7yoke-server.exe` directly.
-- **Firewall:** inbound TCP for `Flip7yoke-server.exe`, Private networks only.
+- **Firewall:** an inbound rule named "Flip7yoke" for the program `<install>\Flip7yoke-server.exe`, TCP, Private networks only.
+  - It's tied to the program, not to port numbers, so changing ports in Settings doesn't need a new rule.
   - Added with `netsh advfirewall firewall add rule` run elevated, so there's one UAC prompt.
-  - If the user says no, the install carries on. Windows asks again when the server first starts. The finish page says phones can't connect until it's allowed.
+  - If the user says no, the install carries on and the finish page says phones can't connect yet. Windows may or may not ask by itself later, so nothing relies on that.
   - Uninstall removes the rule, with one more UAC prompt.
+- **Firewall in the control window:**
+  - On Start it checks whether the rule exists and points at this install's exe. `netsh advfirewall firewall show rule name=Flip7yoke verbose` needs no admin.
+  - If the rule is missing or points elsewhere (for example, after moving the install), the status line says "Phones may be blocked by the firewall" with an "Allow phones" button. The button runs the same elevated `netsh` (one UAC prompt) and checks again.
+  - The check can't see third-party firewalls or a router that isolates Wi-Fi clients, so the message says "may".
 - **Optional task, "Set up the card reader":** downloads about 4 GB, and needs a graphics card with 6 GB or more for good speed.
   - If Ollama answers on 11434 or is installed, skip installing it.
   - Otherwise download the official `OllamaSetup.exe` from ollama.com (not bundled) and run it.
@@ -285,6 +313,11 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
   - It then checks that `Flip7yoke-server.exe` isn't running, using the PID in `server.pid.json`.
   - If the server won't stop, the installer stops with "Close Flip7yoke and try again" and changes nothing.
 - **Data is never touched by the installer.** Scores and settings live in `%LOCALAPPDATA%\Flip7yoke`, outside the program folder, so a failed or cancelled upgrade can't remove them.
+- **Interrupted upgrades: repair, not rollback.**
+  - If the user presses Cancel, Inno Setup undoes what it can.
+  - If setup is killed or the PC loses power halfway, the program folder may be half old, half new, and the app may not start. The fix is to run the installer again (it repairs over the top). Older installers stay on GitHub Releases as a way back.
+  - No transactional update system.
+- **Detecting a broken install:** the control window checks that `Flip7yoke-server.exe` exists and that its version (from the exe metadata) matches the version stamped into `Flip7yoke.ps1` at build time. If not, it says "Flip7yoke didn't finish installing. Run the installer again." and doesn't try to start.
 - **Settings changes between versions:**
   - `config.json` has a `version` number. The new server migrates old versions on first start, after saving a copy as `config.v<old>.json`.
   - `state.json` and `history.json` get the same treatment if their shape ever changes. They're backed up as `*.v<old>.json` before migrating, and the old copy is never overwritten.
@@ -308,15 +341,19 @@ Run on a Windows 11 VM with no Node or Ollama, unless a line says otherwise.
 | Fresh install, no Ollama | Shortcut works, board opens, a phone joins over Wi-Fi, the camera button is hidden |
 | Card-reader task on a PC with Ollama already running | No reinstall, model pulled only if missing, camera appears |
 | Ollama installed, model missing | Status says "Download model", manual scoring works |
-| Ollama stopped mid-game | Camera hides, game carries on; starting Ollama and "Check again" brings it back |
-| Firewall UAC declined | Install completes, finish page explains, Windows asks on first start |
+| Ollama stopped mid-game | Camera hides within about 30 seconds without anyone trying a photo, game carries on; starting Ollama brings it back within about 30 seconds |
+| Firewall UAC declined | Install completes, finish page explains, control window shows "Phones may be blocked" and "Allow phones" fixes it |
 | Port 7777 taken by another program | Clear message, no false "Running" |
 | Port 80 taken | Runs on 7777 |
 | Wi-Fi disconnected, or wired-only PC | Server runs, board shows the address it has, Settings Wi-Fi read fails politely |
 | VPN or Hyper-V adapter present | Auto join address is the home network one; picker can override |
 | Bad `config.json` (broken JSON, duplicate ports, duplicate names) | Understandable message, game still starts |
 | Upgrade with a game in progress | Game and history intact afterwards, settings kept |
-| Installer cancelled or killed halfway | Old install still runs, data intact |
+| Installer cancelled halfway | Data intact; the old install still runs |
+| Installer killed halfway | Data intact; the control window says to run the installer again, and rerunning it gives a working install |
+| Stop from the control window right after a score is entered | That score is in `state.json` after Stop |
+| Kill the supervisor PID by hand | The child saves and exits within a few seconds, and port 7777 is free |
+| Stop, then Start straight away | No restart race, one server running |
 | Uninstall, keep data, reinstall | History is back |
 | Uninstall, delete data | Folder gone, firewall rule gone |
 | Close the control window, kill the `--serve` process | Supervisor restarts it, phones reconnect |
