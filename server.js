@@ -156,16 +156,23 @@ function scheduleAuto() {
 const OLLAMA = new URL(process.env.OLLAMA_URL || 'http://127.0.0.1:11434');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3-vl:4b-instruct' // ~2s per photo on a GTX 1080, read both test hands exactly;
 
-// One guide covering both decks: the rules setting may not match the cards on the table,
-// and telling the model "0 to 12" made it (and our filter) drop real 13s.
-const CARD_GUIDE = `The cards may come from the original Flip 7 deck or from Flip 7 With a Vengeance.
-Number cards show one big number from 0 to 13. The 0 card may say "The Zero".
-A "Lucky 13" is just a number card worth 13, and an "Unlucky 7" is just a number card worth 7.
-Modifier cards show +2, +4, +6, +8, +10, x2, -2, -4, -6, -8, -10 or ÷2 (divide by two).
-Action cards: "Freeze", "Flip Three", "Second Chance", "Just One More", "Flip Four", "Discard", "Steal", "Swap".`;
+// Ask for each physical card once, with its banner word and big symbol, and work the values out here.
+// Asking for plain number/modifier lists made the model count a -8 as a number 8 too, and read sideways
+// 6s as 9s; the banner word (SIX / NINE) settles 6 vs 9 whichever way up. 15/15 on game-night photos.
+// Covers both decks: the rules setting may not match the cards on the table.
+const SCAN_PROMPT = `This photo shows one player's cards from the card game Flip 7, laid out on a table. Cards may be sideways or upside down.
+Number cards are cream with a big number in the middle (0 to 13) and the same number spelled out as a word on a banner along one edge (ONE, SIX, NINE, THIRTEEN, THE ZERO, LUCKY).
+Modifier cards are red or coral (not cream) and show a sign and a number, like -8, +4, x2 or ÷2, with small text "play on any player". They have no word banner.
+Action cards show words like Freeze, Flip Three, Second Chance, Just One More, Flip Four, Discard, Steal or Swap: mark them as other.
+List each physical card exactly once. For number cards, read the banner word carefully: it tells 6 (SIX) from 9 (NINE) whichever way up the card is.
+Ignore anything that is not a card. Reply with compact JSON on a single line.`; // compact JSON halves the answer time
+const BANNER_WORDS = {
+  ZERO: 0, 'THE ZERO': 0, ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5, SIX: 6, SEVEN: 7, EIGHT: 8, NINE: 9,
+  TEN: 10, ELEVEN: 11, TWELVE: 12, THIRTEEN: 13, LUCKY: 13, 'LUCKY 13': 13, UNLUCKY: 7, 'UNLUCKY 7': 7,
+};
 
 // Keep the last few photos and readings on this machine so a misread can be looked at afterwards.
-const SCANS_DIR = path.join(__dirname, 'scans');
+const SCANS_DIR = process.env.SCANS_DIR || path.join(__dirname, 'scans');
 const SCANS_KEEP = 30;
 function keepScan(imageB64, got, hand) {
   try {
@@ -179,12 +186,35 @@ function keepScan(imageB64, got, hand) {
 }
 const SCAN_SCHEMA = {
   type: 'object',
-  properties: {
-    numbers: { type: 'array', items: { type: 'integer' }, description: 'value of every number card, one entry per card, repeats included' },
-    modifiers: { type: 'array', items: { type: 'string' }, description: 'each modifier card exactly as printed, e.g. "+4", "-6", "x2", "÷2"' },
-  },
-  required: ['numbers', 'modifiers'],
+  properties: { cards: { type: 'array', items: { type: 'object', properties: {
+    // colour first: the model commits to it before reading, and red = modifier is reliable even for a card upside down under another
+    colour: { type: 'string', enum: ['cream', 'red', 'other'], description: 'background colour of the card' },
+    kind: { type: 'string', enum: ['number', 'modifier', 'other'] },
+    banner: { type: 'string', description: 'the word on the banner along the side of a number card, e.g. SIX; empty otherwise' },
+    big: { type: 'string', description: 'the big symbol in the middle exactly as printed, including any sign, e.g. 13, -8, ÷2' },
+  }, required: ['colour', 'kind', 'banner', 'big'] } } },
+  required: ['cards'],
 };
+
+// One entry per physical card -> number values and modifier strings. The banner word wins over the big
+// digits (6/9); anything signed is a modifier even if the model called it a number.
+function readCards(cards, V) {
+  const numbers = [], modifiers = [];
+  for (const c of cards || []) {
+    if (!c || c.kind === 'other') continue;
+    const big = String(c.big || '').replace(/\s/g, '').replace(/[−–]/g, '-');
+    // In Vengeance every modifier card is red and every number card cream.
+    if (c.kind === 'modifier' || /^[-+x×÷/*:]/i.test(big) || (V && c.colour === 'red')) {
+      // a bare number on a modifier card takes the deck's sign: minus in Vengeance, plus in Classic
+      modifiers.push(/^\d+$/.test(big) ? (V ? '-' : '+') + big : big);
+      continue;
+    }
+    const word = String(c.banner || '').toUpperCase().replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    const v = word in BANNER_WORDS ? BANNER_WORDS[word] : parseInt(big, 10);
+    if (Number.isInteger(v)) numbers.push(v);
+  }
+  return { numbers, modifiers };
+}
 
 function ollamaChat(body, apiPath = '/api/chat') {
   return new Promise((resolve, reject) => {
@@ -220,15 +250,11 @@ async function scanCards(imageB64) {
     messages: [{
       role: 'user',
       images: [imageB64],
-      content: `This photo shows one player's hand from the card game Flip 7, laid out on a table.
-${CARD_GUIDE}
-List every card you can see. Ignore action cards, card backs and anything that is not a card.
-Each card goes in exactly one list: a card printed with a sign (+, -, x, ÷) is a modifier, never a number card.
-Read the big number in the middle or corner of each card. Do not guess cards you cannot see.
-Reply with compact JSON on a single line, no spaces or line breaks.`, // halves the answer time
+      content: SCAN_PROMPT,
     }],
   });
-  const got = JSON.parse(reply.message.content);
+  const raw = JSON.parse(reply.message.content);
+  const got = { ...readCards(raw.cards, V), cards: raw.cards };
   const hand = { cards: [], mods: [] };
   let vengeanceCards = false; // anything that only exists in the Vengeance deck
   for (const n of got.numbers || []) if (Number.isInteger(n) && n >= 0 && n <= 13) {
