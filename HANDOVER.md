@@ -23,7 +23,7 @@ Repo: `github.com/Ryan-Clinton/flip7yoke` (private). Branch `main`. Ryan's rule 
 | Score keeper | **Windows** Node v22.20.0 | `node run.js`: the supervisor (`lib/supervisor.js`) runs the server (`main.js --serve`) and restarts it on crashes and code changes. Data, settings and logs live in the project folder |
 | Control window `Flip7.ps1` | **Windows** PowerShell 5.1 WinForms | Desktop shortcut "Flip7yoke" (now points at `C:\Projects\flip7yoke\Flip7.ps1`) and `start.bat` |
 | Settings | `config.json` (gitignored) | Players, subtitle, Wi-Fi, card reader, join address, ports. Edit in the control window's Settings. `.env` was moved in and renamed `.env.migrated` |
-| Card reader | Ollama for Windows 0.40.14 is installed, with the model pulled | **But** the WSL Ollama still holds port 11434 until it's stopped (`kill $(cat ~/ollama/serve.pid)` in WSL), so for now the reader still uses the WSL one |
+| Card reader | Ollama for Windows 0.40.14 (the tray app starts it at login), model `qwen3-vl:4b-instruct` on the GTX 1080 | Port 11434. The WSL Ollama is retired (stopped 5 Nov 2026) |
 | Board | Windows Chrome | `http://localhost:7777/board` |
 | Packaged exe | `dist\Flip7yoke-server.exe` (gitignored) | `npm install`, then `npm run build` |
 
@@ -32,7 +32,7 @@ The plan for the installer and what's built so far is in `docs/installer-spec.md
 ## The job: make it Windows-only, then release it
 
 **Status (5 Nov 2026):**
-- Step 1 is done except the very last line: stopping the WSL Ollama for good.
+- Step 1 is done: Windows only, and the WSL copy is retired.
 - In Step 2, settings, Wi-Fi details and the optional camera are done, and `REGULARS` is gone from the code.
 - `Install.ps1` became the Inno Setup installer plan (Stage 4 of `docs/installer-spec.md`), along with the README, licences and release.
 

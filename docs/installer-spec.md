@@ -63,7 +63,7 @@ As in `HANDOVER.md` Step 1:
   - Ollama for Windows 0.40.14 is installed and the model pulled. Its log shows the GTX 1080 found through the CUDA 12 build (the CUDA 13 build skips compute 6.1), with all 37 layers on the GPU.
   - 15/15 passes.
   - The score keeper now runs from `C:\Projects\flip7yoke` and the desktop shortcut points there.
-  - **Still to do:** stop the WSL Ollama for good. Until then it holds port 11434, so the Windows Ollama tray app can't start its own server, and the reader uses the WSL one.
+  - The WSL Ollama was stopped on 5 Nov 2026. The Windows Ollama tray app now serves port 11434, and the live score keeper gets 15/15 through it, at about 5 seconds a photo. The WSL copy is retired.
 
 ### Safe saving
 
