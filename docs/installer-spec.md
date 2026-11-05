@@ -1,6 +1,6 @@
 # Flip7yoke installer: spec
 
-Status: planned. Written 5 Nov 2026.
+Status: planned. Written 5 Nov 2026; revised the same day after ChatGPT audit round 1 (audited commit `ac5e102`).
 
 ## Goal
 
@@ -8,140 +8,339 @@ Someone who isn't technical can download one file, `Flip7yoke-Setup.exe`, click 
 
 What they get:
 
-- A Start menu entry and a desktop icon, "Flip7yoke", that open the control window (Start, Stop, Open board).
+- A Start menu entry and a desktop icon, "Flip7yoke", that open the control window (Start, Stop, Open board, Settings).
 - The board opens in their browser, and phones join by QR code, as they do now.
 - An optional card reader ("📷 Snap my cards"). Without it, the camera button is hidden and everything else works.
 - An uninstall entry in Windows Settings. Uninstalling keeps their score history unless they tick a box to remove it.
 
-Not in scope: Mac or Linux builds, an MSI, auto-update, or bundling Ollama or the model inside the installer.
+Not in scope, on purpose: Mac or Linux builds, an MSI, auto-update, a Windows service, user accounts, cloud storage, telemetry, a CI pipeline, or bundling Ollama or the model inside the installer. Effort goes on what protects a game night: saved scores, working QR codes, reliable start and stop, and clear messages when something predictable goes wrong.
 
-## Order of work
+## Stages
 
-1. Card reader on Windows (handover Step 1). Needed so the camera can be tested on this PC first.
-2. Settings and data folder.
-3. Single exe for the server.
-4. Control window changes.
-5. Installer script.
-6. Build, test on a clean PC, publish a GitHub Release (repo stays private until Ryan says otherwise).
+Each stage leaves a working game. `node run.js` from the repo keeps working throughout.
 
-## 1. Card reader on Windows
+1. **Keep the working game working.** Card reader on Windows, safe saving, gameplay tests.
+2. **Make the app portable.** Data folder, `config.json`, optional card reader, network address choice, Settings.
+3. **Package the server** as one exe, with process ownership and a check that it behaves the same as `node server.js`.
+4. **Build the installer.** Install, upgrade, uninstall, firewall, optional card-reader setup.
+5. **Validate and release.** Run the release checklist, then publish only with Ryan's go-ahead.
+
+A ChatGPT audit round follows stage 3, once the portable app and the exe exist.
+
+## Stage 1: keep the working game working
+
+### Card reader on Windows
 
 As in `HANDOVER.md` Step 1:
 
 - Install Ollama for Windows and run `ollama pull qwen3-vl:4b-instruct`.
-- `Flip7.ps1` starts Windows `ollama serve` instead of `wsl.exe`, records the PID and stops only that PID. If Ollama is already running (the tray app often is), use it and don't stop it on Stop.
-- Check: `node tools/eval-scans.js` gives 15/15. Then retire the WSL copy.
+- `Flip7.ps1` starts Windows `ollama serve` instead of `wsl.exe` and records the PID it started. If Ollama is already running (the tray app often is), use it and leave it running on Stop. Only a PID we started is ever stopped.
+- Check: `node tools/eval-scans.js` gives 15/15 (see "Card-reader check" below). Then retire the WSL copy.
 
-## 2. Settings and data folder
+### Safe saving
+
+Today `save()` and `saveHistory()` in `server.js` call `fs.writeFile(..., () => {})`. Errors are thrown away, and two quick saves can finish out of order, so an older state can land on disk last. A crash mid-write can leave broken JSON.
+
+Replace both with one small writer, used for `state.json` and `history.json`:
+
+- **One write at a time per file.** If a save is requested while one is in flight, remember only the latest and write it next. The newest state always lands last.
+- **Atomic replace.** Write `state.json.tmp`, flush it, then rename it over `state.json`. Before the rename, keep the previous good file as `state.json.bak`.
+- **On start,** read `state.json`. If it's missing or won't parse, fall back to `state.json.bak` and log that it did.
+- **Errors are visible.** A failed write is logged with the reason and sets a `saveError` flag in `/api/status`. The board shows a small "Scores not saving: <reason>" banner, and the control window's status line shows it too. The flag clears on the next good write.
+
+### Gameplay tests
+
+`tests/game.test.js`, run with `node --test` (built into Node 22, no dependencies). It covers:
+
+- Scoring in all three modes from `public/rules.js`: the Zero (Vengeance round only, Brutal whole game), ÷2 rounding, Lucky 13, Flip 7 bonus, the floor at 0 outside Brutal.
+- Server actions against a temp data folder: join, duplicate names, submit and auto-finish a round, edit a score, remove a player, change mode, new game archives to history, delete a history entry, and state surviving a restart (including recovery from a damaged `state.json`).
+
+To make the actions testable, `server.js` exports its action handlers and only starts listening when run directly (`require.main === module`).
+
+### Card-reader check
+
+`tools/eval-scans.js` currently skips photos that aren't there and prints `right/n` for the ones it ran, so a clean run isn't proof of 15/15.
+
+- It takes `--dir <folder>` (default `scans/`) and `--url <server>`.
+- It **fails** (non-zero exit) if any of the 15 expected photos is missing, or if any reading is wrong.
+- The photos stay out of git (they're photos from Ryan's game night). Only someone with the photos can run this check; that's accepted.
+
+## Stage 2: make the app portable
+
+### Install and data ownership
+
+**Per-user install.** Everything belongs to the person who installed it, so there's never a question of whose profile owns the data:
+
+| What | Where |
+|---|---|
+| Program | `%LOCALAPPDATA%\Programs\Flip7yoke\` |
+| Data and settings | `%LOCALAPPDATA%\Flip7yoke\` |
+| Shortcuts | That user's Start menu and desktop |
+| Uninstall entry | That user's (HKCU) |
+
+The installer runs without admin. The only step that needs admin is the firewall rule (see Stage 4), which asks once with a UAC prompt.
 
 ### Data folder
 
-An installed program can't write to `C:\Program Files`. Everything the server writes moves to `%LOCALAPPDATA%\Flip7yoke\`:
-
-| File | Now | Installed |
+| File | From the repo (dev) | Installed |
 |---|---|---|
-| Current game | `state.json` next to `server.js` | `%LOCALAPPDATA%\Flip7yoke\state.json` |
-| Finished games | `history.json` | `...\history.json` |
+| Current game | `state.json` (+ `.bak`) | `%LOCALAPPDATA%\Flip7yoke\state.json` |
+| Finished games | `history.json` (+ `.bak`) | `...\history.json` |
 | Last 30 photos | `scans/` | `...\scans\` |
 | Server log | `logs/` | `...\logs\` |
 | Settings | `.env` | `...\config.json` |
+| Running-server record | n/a | `...\server.pid.json` |
 
-Rule: if `FLIP7_DATA` is set, use it. Otherwise, if running as the packaged exe, use `%LOCALAPPDATA%\Flip7yoke`. Otherwise (running from the repo), keep using the project folder, so development works as now. The existing `STATE_FILE`, `HISTORY_FILE` and `SCANS_DIR` overrides keep working.
+Folder choice, first match wins: `FLIP7_DATA` env var; `%LOCALAPPDATA%\Flip7yoke` when running as the packaged exe; the project folder when running from the repo. The existing `STATE_FILE`, `HISTORY_FILE` and `SCANS_DIR` overrides still win for their own file.
+
+If the data folder can't be created or written, the server doesn't start. It logs one plain sentence ("Can't write to <folder>: <reason>"), and the control window shows it.
 
 ### config.json
 
-Replaces `.env` and the hard-coded values. Example:
+Replaces `.env` and the hard-coded values.
 
 ```json
 {
+  "version": 1,
   "players": ["Ryan", "Gareth", "Rossi"],
   "subtitle": "Thursday game night",
   "wifi": { "ssid": "", "password": "", "auth": "WPA", "showOnBoard": true },
   "cardReader": { "enabled": "auto", "model": "qwen3-vl:4b-instruct", "url": "http://127.0.0.1:11434" },
+  "network": { "address": "auto" },
   "ports": { "main": 7777, "also": 80 }
 }
 ```
 
-- `players` replaces `REGULARS` in `server.js` (line 47). Default for a new install: empty, so the phone page asks for a name.
+**Precedence**, highest first: environment variables (`PORT`, `ALSO_PORT`, `OLLAMA_URL`, `OLLAMA_MODEL`, used by tests and development), then `config.json`, then built-in defaults. A missing key takes its default, so an old or partial file still works.
+
+**Live or restart:**
+
+| Setting | Takes effect |
+|---|---|
+| `players`, `subtitle`, `wifi` | Live: the server re-reads `config.json` when it changes (`fs.watchFile` polling) |
+| `cardReader.enabled` | Live: switching it on runs a readiness check, switching it off hides the camera |
+| `cardReader.model`, `cardReader.url`, `network.address`, `ports` | On the next Start. The Settings panel says "Restart to apply" and offers a Restart button |
+
+**Validation.** Each value is checked on load:
+
+- Bad JSON: keep running on the last good settings (or defaults on first start), log the line and column, and show "Settings file has an error" in the control window. The bad file is left alone for the user to fix or reset from Settings.
+- Bad values are replaced by their default, with a note in the log:
+  - Ports must be whole numbers 1 to 65535, and `main` and `also` must differ (`also: 0` means off).
+  - Player names are trimmed and checked for duplicates case-insensitively, and blanks are dropped.
+  - The card-reader URL must be `http://` or `https://`.
+- The Settings panel runs the same checks before saving, so most mistakes never reach the file.
+
+**Field notes:**
+
+- `players` replaces `REGULARS` in `server.js` (line 47). A new install starts empty, so the phone page asks for a name.
 - `subtitle` replaces the "Thursday game night" text in `public/index.html`. It's served through `/api/info`, not baked into the page.
-- `wifi`: if `ssid` is empty, the server reads the current network with `netsh wlan show interfaces` and the password with `netsh wlan show profile name="<ssid>" key=clear`. No admin rights are needed. `showOnBoard: false` hides the join-the-Wi-Fi QR and the password.
-- `cardReader.enabled`: `"auto"` means on if Ollama answers and has the model, `true` forces on, and `false` forces off. `/api/info` reports the result, and the phone page hides "📷 Snap my cards" when it's off.
-- `ports.also`: already handled. If port 80 is taken, the server logs it and carries on with 7777 (`server.js` line 420).
-- If `.env` exists and `config.json` doesn't, migrate the Wi-Fi values once.
 - `config.json` is gitignored. The repo ships `config.example.json` with no personal data.
-- The server re-reads `config.json` when it changes (same `fs.watchFile` polling as `run.js`), so Settings changes apply without a restart.
+- When it's written (by Settings or a migration), the previous copy is kept as `config.json.bak`.
 
-## 3. Single exe for the server
+**Migration from `.env`.** If `.env` exists and `config.json` doesn't, copy `WIFI_SSID`, `WIFI_PASSWORD` and `WIFI_AUTH` into a new `config.json`, then rename `.env` to `.env.migrated` so it isn't read again. The server stops reading `.env` on every request.
 
-Use Node 22's single executable application (SEA) feature: `Flip7yoke-server.exe` is a copy of `node.exe` with our code injected. No Node install is needed on the target PC.
+### Wi-Fi details
 
-Changes needed, because a SEA can only `require` built-in modules and can't read files beside the script:
+Wi-Fi details are only for the board's join-the-Wi-Fi QR, and only when the host wants it:
 
-- `tools/build.js` writes one bundled script: `server.js` with `public/rules.js` inlined (no bundler needed; it's one file).
-- `public/` (`index.html`, `style.css`, `rules.js`, `qrcode.min.js`, fonts) goes in as SEA assets (`sea-config.json` `assets`). The server reads them with `require('node:sea').getAsset()` when packaged, and from disk when not. One helper, `readPublic(name)`, covers both.
-- Build steps (in `tools/build.js`, run with `node tools/build.js`):
-  1. `node --experimental-sea-config sea-config.json` → `sea-prep.blob`
-  2. Copy `node.exe` to `dist\Flip7yoke-server.exe`
-  3. Inject the blob with `npx postject` (the only dev-time dependency)
-  4. Set the icon and version info with `rcedit` (dev-time only)
-- Expected size: about 80 MB as an exe, about 30 MB inside the compressed installer.
-- `run.js` (auto-restart when files change) stays for development only and isn't shipped. The control window restarts the exe if it crashes.
+- **SSID:** detected with `netsh wlan show interfaces` and offered in Settings. The user can change it.
+- **Password:** Settings has a "Read from Windows" button that tries `netsh wlan show profile name="<ssid>" key=clear`. That can fail (policy, permissions, a wired PC, or non-English Windows, where the output labels are translated). If it does, Settings says so and the user types the password or leaves it blank. The server never runs `netsh` itself; it only uses what's in `config.json`.
+- **Exposure:** `/api/info` includes the Wi-Fi details only when `showOnBoard` is on and a password or SSID is set. With it off, the QR and password aren't sent to anyone. With it on, they go to every device that loads the page, which is the point of putting them on the board. Settings says so next to the tick box.
 
-## 4. Control window
+### Card reader: optional
 
-`Flip7.ps1` stays as PowerShell 5.1 WinForms, ASCII only (handover gotcha).
+Today `warmReader()` runs at start and retries every 15 seconds forever, whether or not Ollama is installed. It becomes a readiness state, reported in `/api/info` and `/api/status`:
 
-- Start launches `Flip7yoke-server.exe` from the install folder when it's there, or `node run.js` when run from the repo.
-- Stop stops the PIDs it started, never by name (no `pkill`-style kills).
-- New **Settings** button: player names (one per line), subtitle, Wi-Fi (prefilled from `netsh`, with a "show on board" tick box), and the card reader on/off. Saves `config.json`.
-- The status line shows whether the card reader is ready, missing Ollama, or missing the model, with a "Set up card reader" button that runs the same steps as the installer option.
-- An "Open data folder" button opens `%LOCALAPPDATA%\Flip7yoke`.
-- The installer ships it as `Flip7yoke.ps1`, and the shortcut runs `powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<install>\Flip7yoke.ps1"` (hides the console, not the form).
+| State | Meaning | Phone shows camera |
+|---|---|---|
+| `off` | `cardReader.enabled` is false | No |
+| `checking` | Check in progress | No |
+| `no-ollama` | Nothing answers at the reader URL | No |
+| `no-model` | Ollama answers but the model isn't pulled | No |
+| `ready` | Model loaded | Yes |
 
-## 5. Installer
+- **`off`:** never contact Ollama.
+- **`auto` or `true`:** at start, check `/api/version` and `/api/tags`, then warm the model (`keep_alive: -1`). The check runs at most 5 times, 15 seconds apart, so Ollama starting just after us still works. After that it stops trying and reports the state.
+- **Re-check without restarting the game:** the control window's "Check card reader" button (or turning it on in Settings) runs the check again. A failed photo read with "can't reach the reader" also triggers one check.
+- The phone page renders "📷 Snap my cards" only when the state is `ready`. It updates live through `/events`, so the button appears when the reader comes up mid-game.
+- Manual scoring never depends on the reader.
 
-Use Inno Setup 6 (free, scripted, makes a single `Setup.exe`). An MSI (WiX) isn't worth it unless the tool needs to go out across managed company PCs.
+### Join address
 
-`installer\Flip7yoke.iss`:
+Today the server lists every IPv4 address, and the board and control window prefer anything starting `192.168.` or `10.`. That can pick a VPN or Hyper-V address the phones can't reach.
 
-- Installs to `C:\Program Files\Flip7yoke\`: `Flip7yoke-server.exe`, `Flip7yoke.ps1`, icon, `LICENSE`, third-party licences.
-- Start menu and optional desktop shortcut.
-- Windows Firewall rule for `Flip7yoke-server.exe`, inbound TCP, Private networks only (`netsh advfirewall firewall add rule ...`). Removed on uninstall.
-- Optional task "Set up the card reader (downloads about 4 GB; needs a graphics card with 6 GB or more for good speed)":
-  - If Ollama is missing, download and run the official `OllamaSetup.exe` from ollama.com (not bundled).
-  - Then `ollama pull qwen3-vl:4b-instruct`, with progress shown in a console window.
-  - Skippable; the control window can do it later.
-- Finish page: "Launch Flip7yoke" ticked by default.
-- Uninstall: removes the program and the firewall rule. It asks before deleting `%LOCALAPPDATA%\Flip7yoke` (score history), and the default is to keep it. It never uninstalls Ollama.
+- **Private ranges:** `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`.
+- **Auto choice** prefers, in order:
+  1. A private address on an adapter that has a default gateway (on Windows, the Wi-Fi or Ethernet adapter that's actually on the home network).
+  2. Any private address on an adapter whose name doesn't look virtual (`vEthernet`, `VirtualBox`, `VMware`, `Hyper-V`, `WSL`, `Tailscale`, `ZeroTier`, `VPN`).
+  3. Anything else.
 
-## 6. Release
+  The server works this out once and returns `joinUrl` plus the full list in `/api/info`. The board and control window use `joinUrl` instead of their own regexes.
+- **Manual choice:** Settings lists the addresses, labelled with the adapter name (from `Get-NetIPAddress`), so the user can pick one when auto gets it wrong. It's stored as `network.address` and applied on the next Start.
+- No further discovery (mDNS, scanning). A good default plus a picker is enough.
 
-- Version number in one place (`package.json` `version`), used by the build and the installer.
-- `README.md` with screenshots (board, phone, scoring sheet), install steps and the SmartScreen note.
+### Who can change the game
+
+Today any device that can reach the server can run every action, including New game, Remove player, Edit score and Delete history. That's how the night works: everyone enters their own score and anyone can fix a mistake.
+
+Kept as is, with two cheap protections:
+
+- **Host check:** the server rejects requests whose `Host` header isn't `localhost`, `127.0.0.1`, or one of this PC's own addresses (port optional). This stops a web page elsewhere from reaching the game through DNS rebinding. It sits alongside the existing JSON-only rule.
+- **Private networks only:** the firewall rule (Stage 4) allows Private networks, not Public, so a café or hotel Wi-Fi can't reach it.
+
+A host PIN for destructive actions is an open question for Ryan (see the end).
+
+### Control window
+
+`Flip7.ps1` stays as PowerShell 5.1 WinForms, ASCII only (handover gotcha). Additions:
+
+- **Settings button:** player names (one per line), subtitle, Wi-Fi (SSID prefilled, "Read from Windows", "show on board" tick box with the exposure note), card reader on/off, join address picker, ports. It validates before saving and shows "Restart to apply" where needed.
+- **Status line:** the server's state, a save error if there is one, and the card-reader state with a matching action: "Install Ollama" for `no-ollama`, "Download model (3.3 GB)" for `no-model`, "Check again".
+- **Open data folder** button for `%LOCALAPPDATA%\Flip7yoke`.
+
+## Stage 3: package the server
+
+### Single executable
+
+`Flip7yoke-server.exe` is a Node single executable application (SEA): a copy of `node.exe` with our code and files injected. No Node install is needed on the target PC.
+
+**Pinned build tools,** recorded in `package.json` (`devDependencies` and `engines`) with a lockfile:
+
+- **Node 22.x LTS,** exact version written in `.node-version`. The build refuses to run on any other version, because SEA blobs are tied to the exact `node.exe` they're injected into.
+- **`postject`** and **`rcedit`,** exact versions. These are dev-only; the app still has no runtime dependencies.
+
+**What goes in.** A SEA can only `require` built-in modules and can't read files beside itself. `tools/build.js`:
+
+- Writes one script, `build/server.bundle.js`. In it, `require('./public/rules.js')` is replaced by the exact text of `public/rules.js` wrapped in a local `module` object:
+
+  ```js
+  const Rules = (() => { const module = { exports: {} }; /* rules.js */; return module.exports; })();
+  ```
+
+  `rules.js` already exports through `module.exports` when `module` exists, so it runs unchanged.
+- Builds an asset manifest from the files in `public/` (including each font). It replaces the `readdirSync` of `public/fonts`, and the `STATIC` allow-list is generated from it.
+- Writes `sea-config.json` with the bundle as `main` and every manifest file as an `asset`.
+
+**How the server reads its files.** One helper, `readPublic(name)`, returns `sea.getAsset(name)` when packaged and reads from disk when not.
+
+**Same scoring everywhere.** The browser's `/rules.js` is served from the same asset as the inlined copy. The build checks the two are byte-identical, so the server and phones can't drift apart.
+
+**Build steps** (`node tools/build.js`):
+
+1. Check the Node version.
+2. Bundle, build the manifest and write `sea-config.json`.
+3. `node --experimental-sea-config sea-config.json` makes `sea-prep.blob`.
+4. Copy `node.exe` to `dist\Flip7yoke-server.exe` and remove its signature (`signtool remove /s` if available; unsigned Node builds skip this).
+5. Inject the blob with `postject`, using the SEA sentinel fuse.
+6. Set the icon, product name, version and description with `rcedit`.
+7. Smoke test: start the exe on a spare port with a temp data folder and check `/api/status`.
+
+**Size:** expected about 80 MB as an exe, about 30 MB inside the compressed installer.
+
+### Supervisor and lifecycle
+
+The control window is a remote control, not a babysitter. Closing it leaves the game running, as now.
+
+- **Crash restarts:** `Flip7yoke-server.exe` started normally acts as a small supervisor. It starts a second copy of itself with `--serve` and restarts it within about 2 seconds if it crashes, the same job `run.js` does in development. It gives up after 5 crashes in a minute and logs why. It stops when told to (see Stop), and never runs as a Windows service.
+- **The record of what's running:** on start, the supervisor writes `server.pid.json` to the data folder, holding its PID, process start time, exe path, port and a random instance token. `/api/status` returns the same token.
+- **Is this ours?** The control window treats the server as running only if all of these hold:
+  - The PID in `server.pid.json` exists.
+  - Its start time and exe path match the record.
+  - `/api/status` answers with the same token.
+
+  A response on port 7777 with no matching token is someone else's program, and the status says "Port 7777 is in use by another program".
+- **Stop:** the control window calls `POST /api/shutdown` (loopback only, carrying the token), which saves and exits cleanly. If nothing has exited after 3 seconds, it stops the recorded supervisor PID, and only that PID. It deletes `server.pid.json`.
+- **One copy only:** Start does nothing if a valid record exists. A stale record (PID gone, or the PID now belongs to a different program) is deleted and Start carries on.
+- **Port taken:** if the main port is taken, the server exits with a clear message, and the control window shows it with a pointer to the Ports setting. If port 80 is taken, the server carries on with 7777, as now (`server.js` line 420).
+- **Development:** from the repo, `run.js` writes the same `server.pid.json`, so the control window works the same way in both setups. The command-line matching in `Get-FlipProcs` goes.
+
+### Same behaviour check
+
+The gameplay tests from Stage 1 run twice: against `node server.js`, and against `dist\Flip7yoke-server.exe` over HTTP. `tools/eval-scans.js --url` runs against the exe as well.
+
+## Stage 4: build the installer
+
+Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.iss`:
+
+- **Per-user** (`PrivilegesRequired=lowest`), installing to `%LOCALAPPDATA%\Programs\Flip7yoke\`: `Flip7yoke-server.exe`, `Flip7yoke.ps1`, icon, `LICENSE`, third-party licences.
+- **Fixed `AppId`,** so a later installer recognises an existing install as an upgrade.
+- **Start menu shortcut,** plus a desktop shortcut as a ticked option. Both run `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<install>\Flip7yoke.ps1"`. `Bypass` applies to this one script only, so a normal machine policy doesn't block it; it doesn't change any system setting. Where Group Policy forbids PowerShell scripts outright, the control window won't open. The README says so, and the server can still be started by running `Flip7yoke-server.exe` directly.
+- **Firewall:** inbound TCP for `Flip7yoke-server.exe`, Private networks only.
+  - Added with `netsh advfirewall firewall add rule` run elevated, so there's one UAC prompt.
+  - If the user says no, the install carries on. Windows asks again when the server first starts. The finish page says phones can't connect until it's allowed.
+  - Uninstall removes the rule, with one more UAC prompt.
+- **Optional task, "Set up the card reader":** downloads about 4 GB, and needs a graphics card with 6 GB or more for good speed.
+  - If Ollama answers on 11434 or is installed, skip installing it.
+  - Otherwise download the official `OllamaSetup.exe` from ollama.com (not bundled) and run it.
+  - If the model is already pulled, skip the download.
+  - Otherwise run `ollama pull qwen3-vl:4b-instruct` in a visible console with its progress.
+  - Any failure leaves the install complete, with the card reader off. The control window's status line offers the same steps later.
+- **Finish page:** "Launch Flip7yoke" ticked by default.
+
+### Upgrades
+
+- **Detection:** Inno finds the existing install by `AppId` and installs over it in the same folder.
+- **Stopping the server:**
+  - Before copying files, the installer runs `Flip7yoke.ps1 -Action stop`. That's a clean shutdown, so the current game is saved.
+  - It then checks that `Flip7yoke-server.exe` isn't running, using the PID in `server.pid.json`.
+  - If the server won't stop, the installer stops with "Close Flip7yoke and try again" and changes nothing.
+- **Data is never touched by the installer.** Scores and settings live in `%LOCALAPPDATA%\Flip7yoke`, outside the program folder, so a failed or cancelled upgrade can't remove them.
+- **Settings changes between versions:**
+  - `config.json` has a `version` number. The new server migrates old versions on first start, after saving a copy as `config.v<old>.json`.
+  - `state.json` and `history.json` get the same treatment if their shape ever changes. They're backed up as `*.v<old>.json` before migrating, and the old copy is never overwritten.
+- **Running game:** after an upgrade, Start resumes the saved game where it left off (the auto-finish timer resets, as it does now on restart).
+
+### Uninstall
+
+- Stops the server the same way.
+- Removes the program, shortcuts and firewall rule.
+- Asks whether to delete `%LOCALAPPDATA%\Flip7yoke` (score history and settings); the default is to keep it.
+- It never uninstalls Ollama or the model.
+
+## Stage 5: validate and release
+
+### Release checklist (manual)
+
+Run on a Windows 11 VM with no Node or Ollama, unless a line says otherwise.
+
+| Check | Expected |
+|---|---|
+| Fresh install, no Ollama | Shortcut works, board opens, a phone joins over Wi-Fi, the camera button is hidden |
+| Card-reader task on a PC with Ollama already running | No reinstall, model pulled only if missing, camera appears |
+| Ollama installed, model missing | Status says "Download model", manual scoring works |
+| Ollama stopped mid-game | Camera hides, game carries on; starting Ollama and "Check again" brings it back |
+| Firewall UAC declined | Install completes, finish page explains, Windows asks on first start |
+| Port 7777 taken by another program | Clear message, no false "Running" |
+| Port 80 taken | Runs on 7777 |
+| Wi-Fi disconnected, or wired-only PC | Server runs, board shows the address it has, Settings Wi-Fi read fails politely |
+| VPN or Hyper-V adapter present | Auto join address is the home network one; picker can override |
+| Bad `config.json` (broken JSON, duplicate ports, duplicate names) | Understandable message, game still starts |
+| Upgrade with a game in progress | Game and history intact afterwards, settings kept |
+| Installer cancelled or killed halfway | Old install still runs, data intact |
+| Uninstall, keep data, reinstall | History is back |
+| Uninstall, delete data | Folder gone, firewall rule gone |
+| Close the control window, kill the `--serve` process | Supervisor restarts it, phones reconnect |
+| Older phones (handover list) | Phone page works; no `??`, `||=`, `createImageBitmap`, bare `color-mix()` |
+| Gameplay tests against the exe | Pass |
+| `eval-scans.js --url` against the exe (needs the photos) | 15/15, exit code 0 |
+
+### Release
+
+- Version number in one place (`package.json` `version`), used by the build, the exe metadata and the installer.
+- `README.md` with screenshots (board, phone, scoring sheet), install steps and build notes.
+  - **Unsigned installer:** the first release is unsigned, so Windows SmartScreen shows "Windows protected your PC". The README says why, says to download only from the project's GitHub Releases page, and lists the file's SHA-256 so people can check it's the real one. Only then does it say that **More info**, then **Run anyway**, proceeds. It doesn't present warnings in general as something to click past.
 - `LICENSE` (MIT), plus OFL for Big Shoulders and Barlow and MIT for qrcode-generator 1.4.4.
-- Disclaimer on the board footer, the README and the installer's first page: "Unofficial score keeper for Flip 7. Not affiliated with The Op." Our own design, no card art from the published game.
-- The build produces `dist\Flip7yoke-Setup-<version>.exe`, uploaded to GitHub Releases.
-- **Ask Ryan before making the repo or a release public.** Consider a fresh single-commit public repo; the only personal data in code today is `REGULARS`, which this spec removes.
+- Disclaimer on the board footer, the README and the installer's first page: "Unofficial score keeper for Flip 7. Not affiliated with The Op." Our own design, with no card art from the published game.
+- The build produces `dist\Flip7yoke-Setup-<version>.exe` and its SHA-256, uploaded to GitHub Releases.
+- **Ask Ryan before making the repo or a release public.** Consider a fresh single-commit public repo. The only personal data in code today is `REGULARS`, which Stage 2 removes.
 
 ### Code signing
 
-The first release is unsigned. Windows SmartScreen will show "Windows protected your PC"; users click **More info**, then **Run anyway**. The README says so. If it's shared beyond friends, sign it with Azure Trusted Signing (about $10 a month); the build gets one extra `signtool` step.
-
-## Testing
-
-- Development: everything still runs from the repo with `node run.js` and the current `Flip7.ps1`, with no build needed.
-- Packaged exe: on a spare port with a temp data folder (`PORT=7799 ALSO_PORT=0 FLIP7_DATA=<scratch>`), check `/board`, `/`, a full round, history, and `/api/info` with the card reader on and off.
-- Card reader: `node tools/eval-scans.js` gives 15/15 against the packaged exe.
-- Clean PC: install on a Windows 11 machine or VM with no Node or Ollama. Check that:
-  - The shortcut works.
-  - A phone joins over Wi-Fi (firewall rule).
-  - Settings save.
-  - The camera button is hidden without Ollama.
-  - Uninstall keeps the history unless asked.
-- Older phones: the front end rules in the handover still apply (no `??`, `||=`, `createImageBitmap`, bare `color-mix()`).
+Later, if it's shared beyond friends: Azure Trusted Signing (about $10 a month). The build gets one extra `signtool` step, for both the server exe and the installer.
 
 ## Open questions for Ryan
 
 - Name on the Start menu and installer: "Flip7yoke"?
 - Should a new install start with no players, or with example names?
-- Is a desktop shortcut ticked by default?
+- Should the desktop shortcut be ticked by default? (Spec assumes yes.)
+- **Host PIN:** should New game, Delete history and Remove player need a PIN typed on the phone? Recommendation: no, at least for the friends release. Anyone at the table can already fix scores, the server is only reachable on Private networks, and the Host check covers the web-page route. A PIN adds a step on game night to guard against your own friends.
