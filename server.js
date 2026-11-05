@@ -5,12 +5,13 @@ const os = require('os');
 const path = require('path');
 
 const PORT = Number(process.env.PORT) || 7777;
-const STATE_FILE = path.join(__dirname, 'state.json');
+const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 const INDEX = path.join(__dirname, 'public', 'index.html');
 
 const fresh = () => ({ mode: 'classic', target: 200, players: [], rounds: [], draft: {}, version: 0 });
 let state = fresh();
 try { state = { ...fresh(), ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch {}
+state.finishing = false; // the auto-finish timer doesn't survive a restart
 
 const clients = new Set();
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -39,9 +40,15 @@ function cleanEntry(e) {
 }
 
 const actions = {
+  // Joining with a name already in the game claims that player, so a phone that reloads doesn't add a duplicate.
   addPlayer({ name }) {
     name = String(name || '').trim().slice(0, 20);
-    if (name) state.players.push({ id: uid(), name });
+    if (!name) return;
+    const same = state.players.find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (same) return { id: same.id };
+    const p = { id: uid(), name };
+    state.players.push(p);
+    return { id: p.id };
   },
   removePlayer({ id }) {
     state.players = state.players.filter(p => p.id !== id);
@@ -88,6 +95,26 @@ const actions = {
   newGame() { state.rounds = []; state.draft = {}; },
 };
 
+// Once every player has sent a score, finish the round after a short pause (time to fix a typo).
+const AUTO_MS = 5000;
+let autoTimer = null;
+function scheduleAuto() {
+  const all = state.players.length > 0 && state.players.every(p => state.draft[p.id]);
+  if (all && !autoTimer) {
+    state.finishing = true;
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      state.finishing = false;
+      if (state.players.every(p => state.draft[p.id])) actions.commitRound();
+      save();
+    }, AUTO_MS);
+  } else if (!all && autoTimer) {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+    state.finishing = false;
+  }
+}
+
 function lanUrls() {
   return Object.values(os.networkInterfaces()).flat()
     .filter(i => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254'))
@@ -116,9 +143,11 @@ http.createServer((req, res) => {
       try {
         const { type, ...args } = JSON.parse(body);
         if (!actions[type]) throw new Error('unknown action');
-        actions[type](args);
+        const out = actions[type](args);
+        scheduleAuto();
         save();
-        res.writeHead(204).end();
+        if (out) res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(out));
+        else res.writeHead(204).end();
       } catch (e) {
         res.writeHead(400).end(String(e.message));
       }

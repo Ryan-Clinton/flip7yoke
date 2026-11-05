@@ -77,6 +77,28 @@
   .hits button.on { background: var(--bad); color: #fff; }
   td.wiped { color: var(--bad); font-weight: 700; }
   .neg { color: var(--bad); }
+  .done { color: var(--good); font-weight: 700; }
+  /* phone view */
+  .me { text-align: center; }
+  .me .total { font-size: 64px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .bigbtn { width: 100%; padding: 22px; font-size: 22px; margin-top: 4px; }
+  .stand { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .stand:last-child { border: 0; }
+  .stand.you { color: var(--accent); font-weight: 700; }
+  .who { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  /* board view (computer screen) */
+  body.board main { max-width: 1400px; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+  body.board .player .name { font-size: 30px; }
+  body.board .player .total { font-size: 48px; }
+  body.board .player .sub { font-size: 18px; }
+  body.board .player .rank { font-size: 22px; }
+  body.board .bar { height: 10px; }
+  body.board .footer button { max-width: 900px; }
+  .joinPanel { position: sticky; top: 76px; text-align: center; }
+  .joinPanel #boardQr { background: #fff; padding: 12px; border-radius: 12px; width: fit-content; margin: 10px auto; }
+  .joinPanel #boardQr img { display: block; width: 240px; height: 240px; image-rendering: pixelated; }
+  .finishing { background: var(--good); color: #1a1a1a; border-radius: 16px; padding: 14px; margin-bottom: 12px; text-align: center; font-weight: 700; font-size: 20px; }
+  @media (max-width: 800px) { body.board main { grid-template-columns: 1fr; } .joinPanel { position: static; } }
 </style>
 </head>
 <body>
@@ -107,6 +129,13 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let S = null;
 
+const BOARD = location.pathname.startsWith('/board');
+document.body.classList.toggle('board', BOARD);
+// This phone's player id. Per-device only, so a lost value just means tapping your name again.
+const getMe = () => { try { return localStorage.getItem('flip7.me'); } catch { return null; } };
+const setMe = id => { try { id ? localStorage.setItem('flip7.me', id) : localStorage.removeItem('flip7.me'); } catch {} render(); };
+const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+
 const MODE_NAMES = { classic: 'Classic', vengeance: 'Vengeance', brutal: 'Brutal' };
 const mode = () => S.mode || 'classic';
 const veng = () => Rules.isVengeance(mode());
@@ -124,28 +153,90 @@ function connect() {
 }
 
 function render() {
-  const app = $('#app');
+  if (!S) return;
   const tag = $('#modeTag');
   tag.hidden = mode() === 'classic';
   tag.className = 'mode ' + mode();
   tag.textContent = MODE_NAMES[mode()];
+  $('#menuBtn').hidden = !BOARD;
+  $('#shareBtn').hidden = BOARD; // the board shows the join QR permanently
+  if (BOARD) renderBoard(); else renderPhone();
+  if ($('#menuSheet').classList.contains('open')) renderMenu();
+}
+
+function standings() {
+  const tot = totals();
+  const ranked = [...S.players].sort((a, b) => tot[b.id] - tot[a.id]);
+  const best = ranked.length ? tot[ranked[0].id] : 0;
+  const over = !!S.rounds.length && best >= S.target;
+  const winners = ranked.filter(p => tot[p.id] === best);
+  const banner = over ? `<div class="banner">🏆 ${winners.map(p => esc(p.name)).join(' & ')} win${winners.length > 1 ? '' : 's'} with ${best}!</div>` : '';
+  return { tot, ranked, best, over, banner };
+}
+
+// ---- phone: join, then enter your own score each round ----
+function renderPhone() {
+  const app = $('#app');
+  $('#footer').hidden = true;
+  const me = S.players.find(p => p.id === getMe());
+  if (!me) {
+    app.innerHTML = `<div class="card"><h3 style="margin-top:0">What's your name?</h3>
+      <form id="joinForm" class="row"><input placeholder="Your name" autocomplete="off" maxlength="20"><button class="primary">Join</button></form>
+      ${S.players.length ? `<p class="muted" style="margin:14px 0 0">Already in the game? Tap your name:</p>
+      <div class="who">${S.players.map(p => `<button data-me="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}</div>`;
+    $('#joinForm').onsubmit = async ev => {
+      ev.preventDefault();
+      const name = ev.target.querySelector('input').value.trim();
+      if (!name) return;
+      const r = await act('addPlayer', { name });
+      if (r.ok) setMe((await r.json()).id);
+    };
+    app.querySelectorAll('[data-me]').forEach(el => el.onclick = () => setMe(el.dataset.me));
+    return;
+  }
+  const { tot, ranked, over, banner } = standings();
+  const rank = ranked.findIndex(p => p.id === me.id) + 1;
+  const e = S.draft[me.id];
+  const entered = Object.keys(S.draft).length;
+  const left = S.target - tot[me.id];
+  let html = banner + `<div class="card me">
+      <div class="muted">${esc(me.name)} · ${ord(rank)} of ${S.players.length}</div>
+      <div class="total ${tot[me.id] < 0 ? 'neg' : ''}">${tot[me.id]}</div>
+      <div class="muted">${left > 0 ? left + ' to go' : 'Target reached'}</div></div>`;
+  if (!over || e) {
+    html += `<div class="card">${e
+      ? `<div style="text-align:center"><div class="done">✓ Round ${S.rounds.length + 1} score sent</div><div style="margin:6px 0 10px">${entryStatus(e)}</div>
+         <button id="mine" style="width:100%">Change my score</button></div>`
+      : `<button class="primary bigbtn" id="mine">Enter my round ${S.rounds.length + 1} score</button>`}
+      <p class="muted" style="text-align:center;margin:10px 0 0">${S.finishing ? 'All scores in, finishing the round…' : `${entered} of ${S.players.length} scores in`}</p></div>`;
+  }
+  html += `<h2>Standings</h2><div class="card">${ranked.map((p, i) => `<div class="stand ${p.id === me.id ? 'you' : ''}">
+      <span>${i + 1}. ${esc(p.name)} ${S.draft[p.id] ? '<span class="done">✓</span>' : ''}</span><span class="${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</span></div>`).join('')}</div>
+    <p class="muted" style="text-align:center">Not ${esc(me.name)}? <button class="ghost" id="notMe">Switch player</button></p>`;
+  app.innerHTML = html;
+  const mine = $('#mine');
+  if (mine) mine.onclick = () => openEntry(me.id);
+  $('#notMe').onclick = () => setMe(null);
+}
+
+// ---- board: the big shared screen ----
+function renderBoard() {
+  const app = $('#app');
   if (!S.players.length) {
     app.innerHTML = `<div class="card"><h3 style="margin-top:0">Who's playing?</h3>
       <form id="addForm" class="row"><input id="newName" placeholder="Player name" autocomplete="off"><button class="primary">Add</button></form></div>`;
     $('#addForm').onsubmit = addPlayer;
     $('#footer').hidden = true;
+    app.insertAdjacentHTML('beforeend', joinPanel());
+    drawBoardQr();
     return;
   }
-  const tot = totals();
-  const ranked = [...S.players].sort((a, b) => tot[b.id] - tot[a.id]);
-  const best = tot[ranked[0].id];
-  const over = S.rounds.length && best >= S.target;
-  const winners = ranked.filter(p => tot[p.id] === best);
-  let html = '';
-  if (over) html += `<div class="banner">🏆 ${winners.map(p => esc(p.name)).join(' & ')} win${winners.length > 1 ? '' : 's'} with ${best}!</div>`;
+  const { tot, ranked, best, over, banner } = standings();
+  let html = '<div>' + banner;
+  if (S.finishing) html += `<div class="finishing">All scores in. Finishing round ${S.rounds.length + 1}…</div>`;
   html += ranked.map((p, i) => {
     const e = S.draft[p.id];
-    const status = !e ? 'Tap to score round' : entryStatus(e);
+    const status = !e ? 'Waiting for score…' : `<span class="done">✓</span> ${entryStatus(e)}`;
     const left = Math.max(0, S.target - tot[p.id]);
     return `<div class="card player ${tot[p.id] === best && best > 0 ? 'lead' : ''}" data-pid="${p.id}">
       <div class="rank">${i + 1}</div><div class="name">${esc(p.name)}</div><div class="total ${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</div>
@@ -163,7 +254,9 @@ function render() {
     });
     html += `</table><p class="muted" style="margin:8px 0 0">Tap a score to fix it.${S.rounds.some(r => (r.zero || []).length) ? ' ⓪ = total wiped to 0 (type a score to undo).' : ''}</p></div>`;
   }
+  html += '</div>' + joinPanel();
   app.innerHTML = html;
+  drawBoardQr();
 
   app.querySelectorAll('[data-pid]').forEach(el => el.onclick = () => openEntry(el.dataset.pid));
   app.querySelectorAll('td.ed').forEach(el => el.onclick = () => {
@@ -177,7 +270,25 @@ function render() {
   const entered = Object.keys(S.draft).length;
   $('#footer').hidden = over && !entered;
   $('#commitBtn').textContent = `Finish round ${S.rounds.length + 1} (${entered}/${S.players.length} scored)`;
-  if ($('#menuSheet').classList.contains('open')) renderMenu();
+}
+
+// Join instructions stay on the board so people can scan whenever they sit down.
+let joinUrls = null;
+fetch('/api/info').then(r => r.json()).then(i => {
+  const lan = i.urls.filter(u => /\/\/(192\.168|10\.)/.test(u));
+  joinUrls = lan.length ? lan : i.urls;
+  render();
+}).catch(() => {});
+function joinPanel() {
+  return `<div class="card joinPanel"><h3 style="margin:0">Join on your phone</h3>
+    <p class="muted" style="margin:4px 0 0">Same Wi-Fi, then scan or type:</p>
+    <div id="boardQr"></div>${(joinUrls || []).map(u => `<div class="url">${esc(u)}</div>`).join('')}</div>`;
+}
+function drawBoardQr() {
+  const box = $('#boardQr');
+  if (!box || !joinUrls || !joinUrls[0] || !window.qrcode) { if (box) box.hidden = true; return; }
+  const q = qrcode(0, 'M'); q.addData(joinUrls[0]); q.make();
+  box.innerHTML = q.createImgTag(8, 0);
 }
 
 function entryStatus(e) {
@@ -249,12 +360,12 @@ function drawEntry() {
       <button class="bust ${E.bust ? 'on' : ''}" data-bust style="flex:1">Bust</button>
       <input type="number" inputmode="numeric" placeholder="or type score" id="manual" value="${manual ? E.manual : ''}" style="flex:1.3">
     </div>
-    <button class="wipe ${E.wipe ? 'on' : ''}" data-wipe style="width:100%;margin-top:8px">${E.wipe ? 'Total will be wiped to 0 (tap to cancel)' : 'Zero their total'}</button>
+    <button class="wipe ${E.wipe ? 'on' : ''}" data-wipe style="width:100%;margin-top:8px">${E.wipe ? 'Total will be wiped to 0 (tap to cancel)' : BOARD ? 'Zero their total' : 'Zero my total'}</button>
     <div class="actions">
       <button data-clear>${S.draft[editing] ? 'Clear' : 'Cancel'}</button>
       <button class="primary" data-save>Save ${score}</button>
     </div>
-    <p class="muted" style="text-align:center"><button class="ghost" data-rename>Rename</button> · <button class="ghost" data-remove>Remove player</button></p>`;
+    <p class="muted" style="text-align:center"><button class="ghost" data-rename>Rename</button>${BOARD ? ' · <button class="ghost" data-remove>Remove player</button>' : ''}</p>`;
   const b = $('#entryBody');
   const tweak = fn => () => { fn(); delete E.manual; if (!brutal || !E.bust) E.bust = false; drawEntry(); };
   b.querySelectorAll('[data-n]').forEach(el => el.onclick = () => {
@@ -290,7 +401,7 @@ function drawEntry() {
     if (n && n.trim()) act('renamePlayer', { id: p.id, name: n });
     closeSheets();
   };
-  b.querySelector('[data-remove]').onclick = () => {
+  if (BOARD) b.querySelector('[data-remove]').onclick = () => {
     if (confirm(`Remove ${p.name}? Their round scores are hidden too.`)) act('removePlayer', { id: p.id });
     closeSheets();
   };
