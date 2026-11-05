@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- the design is already dark felt; stop phone browsers (e.g. Samsung Internet) auto-inverting it -->
+<meta name="color-scheme" content="only light">
 <meta name="theme-color" content="#132A74">
 <title>Flip7yoke</title>
 <link rel="preload" href="/fonts/bigshoulders-inline-800.woff2" as="font" type="font/woff2" crossorigin>
@@ -48,8 +50,8 @@ const mode = () => S.mode || 'classic';
 const veng = () => Rules.isVengeance(mode());
 const entryScore = e => Rules.entryScore(e, mode());
 const nameOf = id => (S.players.find(p => p.id === id) || {}).name || '?';
-// The Zero house rule (default): wipes the whole game total. Rulebook: only that round scores 0.
-const zeroWipes = () => (S.zeroRule || 'total') === 'total';
+// The Zero: in Vengeance only that round scores 0 (the publisher's ruling); in Brutal it wipes the whole game total.
+const zeroWipes = () => mode() === 'brutal';
 // Each player gets a colour from the deck's numerals, in the order they joined.
 const DECK_COLOURS = ['#D9443A', '#2F8ED1', '#2BB0AC', '#8CC43F', '#E9B43C', '#B05FB0', '#8C6E5A'];
 const pcOf = id => DECK_COLOURS[Math.max(0, S.players.findIndex(p => p.id === id)) % DECK_COLOURS.length];
@@ -170,8 +172,8 @@ function renderBoard() {
     html += `<h2>Rounds</h2><div class="card scroll"><table><tr><th>#</th>${S.players.map(p => `<th>${esc(p.name)}<i style="background:${pcOf(p.id)}"></i></th>`).join('')}<th></th></tr>`;
     S.rounds.forEach((r, i) => {
       html += `<tr><td class="muted">${i + 1}</td>${S.players.map(p => (r.zero || []).includes(p.id)
-        ? `<td class="ed wiped" data-r="${i}" data-p="${p.id}" data-v="${r.scores[p.id] ?? 0}" title="Total wiped to 0">⓪</td>`
-        : `<td class="ed" data-r="${i}" data-p="${p.id}">${r.scores[p.id] ?? 0}</td>`).join('')}
+        ? `<td class="ed wiped" data-r="${i}" data-p="${p.id}" data-v="${r.scores[p.id] || 0}" title="Total wiped to 0">⓪</td>`
+        : `<td class="ed" data-r="${i}" data-p="${p.id}">${r.scores[p.id] || 0}</td>`).join('')}
         <td><button class="ghost" data-del="${i}">✕</button></td></tr>`;
     });
     html += `</table><p class="muted" style="margin:8px 0 0">Tap a score to fix it.${S.rounds.some(r => (r.zero || []).length) ? ' ⓪ = total wiped to 0 (type a score to undo).' : ''}</p></div>`;
@@ -182,7 +184,7 @@ function renderBoard() {
 
   app.querySelectorAll('[data-pid]').forEach(el => el.onclick = () => openEntry(el.dataset.pid));
   app.querySelectorAll('td.ed').forEach(el => el.onclick = () => {
-    const v = prompt('New score', el.dataset.v ?? el.textContent);
+    const v = prompt('New score', el.dataset.v !== undefined ? el.dataset.v : el.textContent);
     if (v !== null && v.trim() !== '' && !isNaN(+v)) act('editScore', { round: +el.dataset.r, id: el.dataset.p, score: +v });
   });
   app.querySelectorAll('[data-del]').forEach(el => el.onclick = () => {
@@ -251,7 +253,7 @@ function openEntry(pid) {
   editing = pid;
   const cur = S.draft[pid] || loadWip(pid);
   E = cur ? JSON.parse(JSON.stringify(cur)) : { cards: [], mods: [], bust: false };
-  E.cards ||= []; E.mods ||= [];
+  E.cards = E.cards || []; E.mods = E.mods || [];
   H = []; note = '';
   drawEntry();
   $('#entrySheet').classList.add('open');
@@ -293,7 +295,13 @@ function deal(n, lucky) {
 // ---- card reader: photo -> local vision model on the computer -> hand to check ----
 let scanning = false;
 async function shrinkPhoto(file, max = 1024) { // the reader resizes anyway; smaller is a quicker upload
-  const img = await createImageBitmap(file);
+  // <img> + object URL works on older phones that lack createImageBitmap
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error("Couldn't open that photo. Try again."));
+    i.src = URL.createObjectURL(file);
+  });
   const k = Math.min(1, max / Math.max(img.width, img.height));
   const c = document.createElement('canvas');
   c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
@@ -458,16 +466,9 @@ function renderMenu() {
     <div class="seg">${Object.entries(MODE_NAMES).map(([k, v]) => `<button data-mode="${k}" class="${mode() === k ? 'on' : ''}">${v}</button>`).join('')}</div>
     <p class="muted" style="margin:6px 0 0">${{
       classic: 'Original Flip 7: cards 0-12, +2 to +10 and ×2 modifiers.',
-      vengeance: 'With a Vengeance: cards 0-13, Lucky 13, The Zero, −2 to −10 and ÷2. Round scores never drop below 0.',
-      brutal: 'Vengeance plus Brutal Mode: round scores can go negative, modifiers hit busted players, and a Flip 7 can take −15 off someone else.',
+      vengeance: 'With a Vengeance: cards 0-13, Lucky 13, The Zero, −2 to −10 and ÷2. Round scores never drop below 0. The Zero scores that round 0 unless you Flip 7.',
+      brutal: 'Vengeance plus Brutal Mode: round scores can go negative, modifiers hit busted players, a Flip 7 can take −15 off someone else, and The Zero wipes your whole total unless you Flip 7.',
     }[mode()]}</p>
-    ${veng() ? `<div class="label">The Zero wipes</div>
-    <div class="seg" style="grid-template-columns:1fr 1fr">
-      <button data-zero="total" class="${zeroWipes() ? 'on' : ''}">The whole total</button>
-      <button data-zero="round" class="${zeroWipes() ? '' : 'on'}">This round only</button></div>
-    <p class="muted" style="margin:6px 0 0">${zeroWipes()
-      ? 'House rule: get The Zero without a Flip 7 and your game total goes back to 0.'
-      : 'Rulebook: The Zero makes that round score 0. Your game total is safe.'}</p>` : ''}
     <div class="label">Players</div>
     <div class="plist" style="margin-top:8px">${S.players.map(p => `<div class="row"><span style="flex:1">${esc(p.name)}</span><button class="ghost" data-rm="${p.id}">Remove</button></div>`).join('')}</div>
     <form id="menuAdd" class="row"><input placeholder="Add player" autocomplete="off"><button class="primary">Add</button></form>
@@ -487,7 +488,6 @@ function renderMenu() {
     if (Object.keys(S.draft).length && !confirm('Switching rules clears the scores entered for this round. Continue?')) return;
     act('setMode', { mode: el.dataset.mode });
   });
-  $('#menuBody').querySelectorAll('[data-zero]').forEach(el => el.onclick = () => act('setZeroRule', { rule: el.dataset.zero }));
   $('#setTarget').onclick = () => act('setTarget', { target: +$('#target').value });
   $('#newGame').onclick = () => { if (confirm('Start a new game? All scores are cleared.')) { act('newGame'); closeSheets(); } };
   bindClose();

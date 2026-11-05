@@ -271,6 +271,8 @@ warmReader();
 
 http.createServer((req, res) => {
   if (req.url === '/events') {
+    // Which browser each device uses, for diagnosing a phone that can't show the page.
+    console.log(`${new Date().toLocaleTimeString()} device connected: ${req.socket.remoteAddress} ${req.headers['user-agent'] || '?'}`);
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     res.write(`data: ${JSON.stringify(state)}\n\n`);
     clients.add(res);

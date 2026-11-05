@@ -89,12 +89,15 @@ h2 { font: 800 24px/1 var(--deco); letter-spacing: .6px; color: var(--cream); ma
   position: relative; overflow: hidden; cursor: pointer;
   display: grid; grid-template-columns: 34px 1fr auto; gap: 4px 12px; align-items: center;
   padding: 18px 22px 16px;
+  /* plain fallback for older phone browsers without color-mix() */
+  box-shadow: inset 0 0 0 6px var(--cream), inset 0 0 0 8px var(--pc), 0 2px 0 rgba(0, 0, 0, .18), 0 12px 26px rgba(6, 16, 52, .38);
   box-shadow: inset 0 0 0 6px var(--cream), inset 0 0 0 8px color-mix(in srgb, var(--pc) 75%, var(--cream)),
               0 2px 0 rgba(0, 0, 0, .18), 0 12px 26px rgba(6, 16, 52, .38);
 }
 .player::after { /* the shell fan hanging from the top edge, as on the cards */
   content: ''; position: absolute; top: 0; left: 30%; width: 92px; height: 46px; pointer-events: none;
   border-radius: 0 0 92px 92px;
+  background: repeating-conic-gradient(from 90deg at 50% 0%, var(--pc) 0deg 11.25deg, var(--card-white) 11.25deg 22.5deg);
   background: repeating-conic-gradient(from 90deg at 50% 0%, var(--pc) 0deg 11.25deg, color-mix(in srgb, var(--pc) 45%, var(--card-white)) 11.25deg 22.5deg);
   opacity: .85;
 }
@@ -137,7 +140,7 @@ td.wiped { color: var(--bad); font-weight: 700; }
 .footer button { width: 100%; max-width: 648px; display: block; margin: 0 auto; padding: 16px; font-size: 21px; }
 
 /* ---- sheets (scoring, menu) ---- */
-.sheet { position: fixed; inset: 0; background: rgba(6, 16, 52, .62); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
+.sheet { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(6, 16, 52, .62); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
 .sheet.open { display: flex; }
 .sheet > div { width: 100%; max-width: 680px; border-radius: 22px 22px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 92vh; overflow-y: auto; box-shadow: 0 -10px 30px rgba(6, 16, 52, .4); }
 .sheet h3 { margin: 0 0 4px; font: 800 30px/1.1 var(--deco); letter-spacing: .4px; color: var(--pc, var(--ink)); -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill; }
@@ -185,11 +188,13 @@ td.wiped { color: var(--bad); font-weight: 700; }
 .me {
   --pc: var(--red);
   position: relative; overflow: hidden; text-align: center; padding: 30px 20px 74px;
+  box-shadow: inset 0 0 0 7px var(--cream), inset 0 0 0 10px var(--pc), 0 2px 0 rgba(0, 0, 0, .18), 0 14px 30px rgba(6, 16, 52, .45);
   box-shadow: inset 0 0 0 7px var(--cream), inset 0 0 0 10px color-mix(in srgb, var(--pc) 75%, var(--cream)),
               0 2px 0 rgba(0, 0, 0, .18), 0 14px 30px rgba(6, 16, 52, .45);
 }
 .me::before, .me::after {
   content: ''; position: absolute; left: 50%; width: 120px; height: 60px; margin-left: -60px; pointer-events: none; opacity: .85;
+  background: repeating-conic-gradient(from 90deg at 50% 0%, var(--pc) 0deg 11.25deg, var(--card-white) 11.25deg 22.5deg);
   background: repeating-conic-gradient(from 90deg at 50% 0%, var(--pc) 0deg 11.25deg, color-mix(in srgb, var(--pc) 45%, var(--card-white)) 11.25deg 22.5deg);
 }
 .me::before { top: 0; border-radius: 0 0 120px 120px; }
