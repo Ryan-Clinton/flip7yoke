@@ -274,7 +274,7 @@ function ollamaChat(body, apiPath = '/api/chat') {
 }
 
 // Returns an entry-shaped hand. The phone shows it for checking before anything is saved.
-async function scanCards(imageB64) {
+async function scanCards(imageB64, keep = true) {
   const V = Rules.isVengeance(state.mode);
   const reply = await ollamaChat({
     model: OLLAMA_MODEL,
@@ -312,7 +312,7 @@ async function scanCards(imageB64) {
   // Unlucky 7 has already discarded everything else by the time of the photo and scores as a plain 7.
   if (V && hand.cards.filter(n => n === 13).length === 2) hand.lucky = true;
   if (!V && vengeanceCards) hand.deckHint = 'vengeance';
-  keepScan(imageB64, got, hand);
+  if (keep) keepScan(imageB64, got, hand);
   return hand;
 }
 
@@ -350,7 +350,8 @@ const mainServer = http.createServer((req, res) => {
       try {
         const { image } = JSON.parse(body);
         if (typeof image !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(image)) throw new Error('no photo');
-        const hand = await scanCards(image);
+        // tools/eval-scans.js marks its requests so test runs don't push real photos out of scans/
+        const hand = await scanCards(image, !req.headers['x-flip7-test']);
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(hand));
       } catch (e) {
         const down = /ECONNREFUSED|ENOTFOUND/.test(e.code || e.message);
