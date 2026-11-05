@@ -85,7 +85,7 @@ $green = [System.Drawing.Color]::FromArgb(61, 220, 151)
 $red = [System.Drawing.Color]::FromArgb(255, 93, 115)
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Flip 7'
+$form.Text = 'Flip7yoke'
 $form.ClientSize = New-Object System.Drawing.Size(460, 330)
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
@@ -110,7 +110,8 @@ function New-Button($text, $x, $y, $w, $h, $back, $fore) {
   $form.Controls.Add($b); return $b
 }
 
-New-Label 'Flip 7' 20 14 200 34 18 $true $gold | Out-Null
+New-Label 'Flip7yoke' 20 14 260 34 18 $true $gold | Out-Null
+New-Label 'Thursday game night' 210 24 230 22 10 $false $muted | Out-Null
 New-Label 'SCORE KEEPER' 20 62 420 18 8 $true $muted | Out-Null
 $scoreLbl = New-Label '...' 20 80 420 22 10
 New-Label 'CARD READER' 20 112 420 18 8 $true $muted | Out-Null
