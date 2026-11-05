@@ -1,6 +1,29 @@
 # Flip7yoke installer: spec
 
-Status: planned. Written 5 Nov 2026; revised the same day after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`).
+Status: **Stages 1 to 3 built** (5 Nov 2026), awaiting the post-Stage-3 audit. Stages 4 and 5 are still plans. Written 5 Nov 2026; revised after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`), then where building Stages 1 to 3 showed a better or necessary way (each marked **As built**).
+
+## What's built (Stages 1 to 3)
+
+| Part | Where |
+|---|---|
+| Safe saving | `lib/store.js` |
+| Settings | `lib/config.js`, `config.example.json` |
+| Data folder, page files from disk or the exe | `lib/paths.js` |
+| Card reader and its states | `lib/reader.js` |
+| Join address | `lib/net.js` |
+| Game server, `start()` | `server.js` |
+| Supervisor, and the server as its child | `lib/supervisor.js`, `lib/child.js`, entry `main.js` (`run.js` in development) |
+| Exe build | `tools/build.js` → `dist\Flip7yoke-server.exe` |
+| Control window | `Flip7.ps1` (Settings, reader fix buttons, process ownership, `-Action snapshot`) |
+| Tests | `npm test` (`tests/game.test.js`, `tests/lifecycle.test.js`); `FLIP7_TEST_EXE=dist\Flip7yoke-server.exe npm test` runs them against the exe |
+| Card-reader check | `node tools/eval-scans.js --url <server>` |
+| Clean stop from a terminal | `node tools/stop.js [data folder]` |
+| Icon | `tools/make-icon.ps1` → `assets\flip7yoke.ico` |
+
+Results on Ryan's PC (GTX 1080, Windows 11, Node 22.20.0, Ollama for Windows 0.40.14):
+- Tests: 23 pass from the repo. Against the exe, 20 pass and 3 are skipped because they test internal modules directly.
+- Card reader: 15/15 against the exe, about 5 seconds a photo; it was about 3 on the old WSL Ollama.
+- The exe is 82 MB.
 
 ## Goal
 
@@ -36,6 +59,11 @@ As in `HANDOVER.md` Step 1:
 - Install Ollama for Windows and run `ollama pull qwen3-vl:4b-instruct`.
 - `Flip7.ps1` starts Windows `ollama serve` instead of `wsl.exe` and records the PID it started. If Ollama is already running (the tray app often is), use it and leave it running on Stop. Only a PID we started is ever stopped.
 - Check: `node tools/eval-scans.js` gives 15/15 (see "Card-reader check" below). Then retire the WSL copy.
+- **As built:**
+  - Ollama for Windows 0.40.14 is installed and the model pulled. Its log shows the GTX 1080 found through the CUDA 12 build (the CUDA 13 build skips compute 6.1), with all 37 layers on the GPU.
+  - 15/15 passes.
+  - The score keeper now runs from `C:\Projects\flip7yoke` and the desktop shortcut points there.
+  - **Still to do:** stop the WSL Ollama for good. Until then it holds port 11434, so the Windows Ollama tray app can't start its own server, and the reader uses the WSL one.
 
 ### Safe saving
 
@@ -163,10 +191,10 @@ Today `warmReader()` runs at start and retries every 15 seconds forever, whether
 | `checking` | Check in progress | No |
 | `no-ollama` | Nothing answers at the reader URL | No |
 | `no-model` | Ollama answers but the model isn't pulled | No |
-| `ready` | Model loaded | Yes |
+| `ready` | Ollama answers and has the model (**as built:** the model is then preloaded onto the GPU as a best effort; if that fails it loads on the first photo, and the log says so) | Yes |
 
 - **`off`:** never contact Ollama.
-- **`auto` or `true`:** at start, check `/api/version` and `/api/tags`, then warm the model (`keep_alive: -1`). The check runs at most 5 times, 15 seconds apart, so Ollama starting just after us still works. After that it stops trying and reports the state.
+- **`auto` or `true`:** both mean on and behave the same. At start, check `/api/version` and `/api/tags`, then warm the model (`keep_alive: -1`). The check runs at most 5 times, 15 seconds apart, so Ollama starting just after us is picked up quickly. After that only the cheap health check below runs.
 - **Health check while enabled:** every 30 seconds, `GET /api/version` (cheap, never loads the model). If it stops answering, the state goes to `no-ollama` and the camera hides. If it answers again, the full check runs (tags, then warm the model), and the state goes back to `ready`. While `off`, nothing runs.
 - **Re-check on demand:** the control window's "Check card reader" button (or turning it on in Settings) runs the full check immediately. A failed photo read with "can't reach the reader" also triggers one.
 - The phone page renders "📷 Snap my cards" only when the state is `ready`. It updates live through `/events`, so the button appears when the reader comes up mid-game.
@@ -178,9 +206,11 @@ Today the server lists every IPv4 address, and the board and control window pref
 
 - **Private ranges:** `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`.
 - **Auto choice** prefers, in order:
-  1. A private address on an adapter that has a default gateway (on Windows, the Wi-Fi or Ethernet adapter that's actually on the home network).
-  2. Any private address on an adapter whose name doesn't look virtual (`vEthernet`, `VirtualBox`, `VMware`, `Hyper-V`, `WSL`, `Tailscale`, `ZeroTier`, `VPN`).
-  3. Anything else.
+  1. The address Windows would use to reach the default gateway, if it's private and its adapter doesn't look virtual. **As built:** found by connecting a UDP socket to a documentation address (`192.0.2.1`), which sends nothing and only asks the routing table. That needs no PowerShell and works offline (it just finds nothing). A full-tunnel VPN owns the default route, so its adapter name sends it to the next rule.
+  2. Any private address on an adapter whose name doesn't look virtual (`vEthernet`, `VirtualBox`, `VMware`, `Hyper-V`, `WSL`, `Tailscale`, `ZeroTier`, `VPN`, `Docker`, `Bluetooth`, `Loopback`).
+  3. Any private address, then anything else.
+
+  On Ryan's PC this picks the Wi-Fi address over two `vEthernet` adapters in `172.16.0.0/12` (Default Switch and WSL), the exact case the audit raised.
 
   The server works this out once and returns `joinUrl` plus the full list in `/api/info`. The board and control window use `joinUrl` instead of their own regexes.
 - **Manual choice:** Settings lists the addresses, labelled with the adapter name (from `Get-NetIPAddress`), so the user can pick one when auto gets it wrong. It's stored as `network.address` and applied on the next Start.
@@ -192,7 +222,7 @@ Today any device that can reach the server can run every action, including New g
 
 Kept as is, with two cheap protections:
 
-- **Host check:** the server rejects requests whose `Host` header isn't `localhost`, `127.0.0.1`, or one of this PC's own addresses (port optional). This stops a web page elsewhere from reaching the game through DNS rebinding. It sits alongside the existing JSON-only rule.
+- **Host check:** the server rejects requests (403) whose `Host` header isn't `localhost`, `127.0.0.1`, `[::1]`, this PC's name (or `<name>.local`), or one of this PC's own addresses (port optional). This stops a web page elsewhere from reaching the game through DNS rebinding. It sits alongside the existing JSON-only rule.
 - **Private networks only:** the firewall rule (Stage 4) allows Private networks, not Public, so a café or hotel Wi-Fi can't reach it.
 
 A host PIN for destructive actions is an open question for Ryan (see the end).
@@ -201,9 +231,18 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 
 `Flip7.ps1` stays as PowerShell 5.1 WinForms, ASCII only (handover gotcha). Additions:
 
-- **Settings button:** player names (one per line), subtitle, Wi-Fi (SSID prefilled, "Read from Windows", "show on board" tick box with the exposure note), card reader on/off, join address picker, ports. It validates before saving and shows "Restart to apply" where needed.
-- **Status line:** the server's state, a save error if there is one, and the card-reader state with a matching action: "Install Ollama" for `no-ollama`, "Download model (3.3 GB)" for `no-model`, "Check again".
-- **Open data folder** button for `%LOCALAPPDATA%\Flip7yoke`.
+- **Settings button:** player names (one per line), subtitle, Wi-Fi ("Detect" fills the SSID, "From Windows" tries the password, "show on board" tick box with the exposure note), card reader on/off, join address picker, ports. It validates before saving.
+  - **As built:** instead of a Restart button, the main window's note line says "Settings changed: press Stop, then Start, to apply them". It shows this whenever `/api/status` lists `restartNeeded` keys.
+  - It writes `config.json` with a `.bak`, the same as the server.
+- **Status line:** the server's state, a save error if there is one, and the card-reader state with a matching action:
+  - "Install Ollama" for `no-ollama` when Ollama isn't installed. It runs `winget install Ollama.Ollama` in a visible window, or opens ollama.com/download if winget is missing.
+  - "Check again" for `no-ollama` when Ollama is installed.
+  - "Download model (3.3 GB)" for `no-model`, which runs `ollama pull` in a visible window.
+
+  Every action ends with `POST /api/reader/check`, which runs the full check now.
+- **Open data folder** button for the data folder (`%LOCALAPPDATA%\Flip7yoke` installed, the project folder from the repo).
+- **Ollama for Windows:** Start uses an Ollama that's already answering (the tray app usually starts one). It only starts `ollama serve` itself if none is, and records that PID in `logs\ollama.pid`. Stop unloads the model (`keep_alive: 0`) to free the GPU, and stops only an Ollama it started.
+- **As built:** `Flip7.ps1 -Action snapshot -Out <folder>` draws the window and Settings to PNGs without showing them on screen, for README screenshots and checks.
 
 ## Stage 3: package the server
 
@@ -214,23 +253,21 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 **Pinned build tools,** recorded in `package.json` (`devDependencies` and `engines`) with a lockfile:
 
 - **Node 22.x LTS,** exact version written in `.node-version`. The build refuses to run on any other version, because SEA blobs are tied to the exact `node.exe` they're injected into.
-- **`postject`** and **`rcedit`,** exact versions. These are dev-only; the app still has no runtime dependencies.
+- **`postject`** (1.0.0-alpha.6, published by the Node.js project), exact version. Dev-only; the app still has no runtime dependencies.
+- **As built: no `rcedit`.** Every `rcedit` version on npm now carries "Package no longer supported. Contact Support", which is npm's wording for a pulled package. Its origin couldn't be confirmed, so it was removed without being run. The exe keeps Node's icon and "Node.js" file description, which show in Task Manager. The shortcuts use `assets\flip7yoke.ico`. The version comes from `Flip7yoke-server.exe --version` rather than file metadata. Revisit with a trusted resource editor, or by signing, later.
 
 **What goes in.** A SEA can only `require` built-in modules and can't read files beside itself. `tools/build.js`:
 
-- Writes one script, `build/server.bundle.js`. In it, `require('./public/rules.js')` is replaced by the exact text of `public/rules.js` wrapped in a local `module` object:
-
-  ```js
-  const Rules = (() => { const module = { exports: {} }; /* rules.js */; return module.exports; })();
-  ```
-
-  `rules.js` already exports through `module.exports` when `module` exists, so it runs unchanged.
+- Writes one script, `build/bundle.js`. **As built:**
+  - Every local module (`main.js`, `server.js`, `lib/*.js`, `public/rules.js`, `package.json`) goes into a table of functions, each with its own `module` object. A small `require` resolves relative paths in that table, and anything else goes to Node's `require`, which in a SEA means built-ins only.
+  - `public/rules.js` is included byte for byte and called with `this` = `module.exports`, so its existing `module.exports` branch runs unchanged.
+  - The build fails if any local `require` points outside the bundle.
 - Builds an asset manifest from the files in `public/` (including each font). It replaces the `readdirSync` of `public/fonts`, and the `STATIC` allow-list is generated from it.
 - Writes `sea-config.json` with the bundle as `main` and every manifest file as an `asset`.
 
 **How the server reads its files.** One helper, `readPublic(name)`, always returns a Node `Buffer`. When packaged it uses `Buffer.from(sea.getAsset(name))`, because `getAsset` returns an `ArrayBuffer`. When not packaged it reads from disk. Packaged detection is `require('node:sea').isSea()`.
 
-**Entry point.** The bundle ends with an explicit call: `--serve` runs `start()`, and no argument runs the supervisor. It never relies on `require.main`. The build's smoke test (step 7) catches an exe that starts and exits without listening.
+**Entry point.** `main.js`, called explicitly by the bundle. `--serve` runs the server (`lib/child.js`, which calls `start()`), `--version` prints the version, and no argument runs the supervisor. It never relies on `require.main`. The build's smoke test (step 6) catches an exe that starts and exits without listening.
 
 **Same scoring everywhere.** The browser's `/rules.js` is served from the same asset as the inlined copy. The build checks the two are byte-identical, so the server and phones can't drift apart.
 
@@ -239,12 +276,14 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 1. Check the Node version.
 2. Bundle, build the manifest and write `sea-config.json`.
 3. `node --experimental-sea-config sea-config.json` makes `sea-prep.blob`.
-4. Copy `node.exe` to `dist\Flip7yoke-server.exe` and remove its signature (`signtool remove /s` if available; unsigned Node builds skip this).
+4. Copy `node.exe` to `dist\Flip7yoke-server.exe` and remove its signature with `signtool remove /s` if signtool is installed. Without it, the now-invalid Node.js signature is left in place; postject warns about it, and Windows still runs the exe.
 5. Inject the blob with `postject`, using the SEA sentinel fuse.
-6. Set the icon, product name, version and description with `rcedit`.
-7. Smoke test: start the exe on a spare port with a temp data folder and check `/api/status`.
+6. Smoke test:
+   - `--version` matches `package.json`.
+   - Started on a spare port with a throwaway data folder, it answers `/api/status` with the token from `server.pid.json` and serves the board.
+   - It stops cleanly through the control channel, with `saved: true` and exit code 0.
 
-**Size:** expected about 80 MB as an exe, about 30 MB inside the compressed installer.
+**Size:** 82 MB as an exe; expected about 30 MB inside the compressed installer.
 
 ### Supervisor and lifecycle
 
@@ -274,12 +313,16 @@ The control window is a remote control, not a babysitter. Closing it leaves the 
 
   There's no shutdown endpoint on the game server, so no phone can stop it.
 - **One copy only:** Start does nothing if a valid record exists. A stale record (PIDs gone, or now belonging to a different program) is deleted and Start carries on.
-- **Port taken:** if the main port is taken, the server exits with a clear message, and the control window shows it with a pointer to the Ports setting. If port 80 is taken, the server carries on with 7777, as now (`server.js` line 420).
-- **Development:** from the repo, `run.js` is the supervisor. It writes the same `server.pid.json`, uses the same IPC stop and control channel, and keeps its file-watching restarts. A watch restart is a supervisor-initiated stop then start, not a crash. The control window works the same way in both setups, and the command-line matching in `Get-FlipProcs` goes.
+- **Port taken:** if the main port is taken, the server exits with a clear message, and the control window shows it with a pointer to the Ports setting. If port 80 is taken, the server carries on with 7777, as now.
+  - **As built:** the server exits with code 2 when it can't start (port taken, data folder not writable). The supervisor treats that as final rather than a crash, writes the message to `server.error.txt` in the data folder, and exits. The control window shows "Last start failed: <message>". A good start deletes the file.
+  - The control window also names another program on the port before Start is pressed. It does this when the port answers without our token.
+- **Second copy (as built):** a supervisor that finds a `server.pid.json` whose control port answers `/ping` with that record's token exits at once ("already running"), so even a double-click on the exe can't start two.
+- **Logs (as built):** the supervisor writes its own and the server's output to `logs\server.log` in the data folder. It moves it to `server.old.log` once it passes 5 MB.
+- **Development:** from the repo, `run.js` (which loads `main.js`) is the supervisor. It writes the same `server.pid.json`, uses the same IPC stop and control channel, and keeps its file-watching restarts. A watch restart is a supervisor-initiated stop then start, not a crash. The control window works the same way in both setups, and the command-line matching in `Get-FlipProcs` is gone.
 
 ### Same behaviour check
 
-The gameplay tests from Stage 1 run twice: against `node server.js`, and against `dist\Flip7yoke-server.exe` over HTTP. `tools/eval-scans.js --url` runs against the exe as well.
+The gameplay and lifecycle tests run twice: from the repo (`npm test`) and against `dist\Flip7yoke-server.exe` (`FLIP7_TEST_EXE` set). In exe mode, the server tests start the exe with `--serve` and stop it over IPC. The lifecycle tests run the exe as the supervisor. `tools/eval-scans.js --url` runs against the exe as well.
 
 ## Stage 4: build the installer
 
@@ -317,7 +360,7 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
   - If the user presses Cancel, Inno Setup undoes what it can.
   - If setup is killed or the PC loses power halfway, the program folder may be half old, half new, and the app may not start. The fix is to run the installer again (it repairs over the top). Older installers stay on GitHub Releases as a way back.
   - No transactional update system.
-- **Detecting a broken install:** the control window checks that `Flip7yoke-server.exe` exists and that its version (from the exe metadata) matches the version stamped into `Flip7yoke.ps1` at build time. If not, it says "Flip7yoke didn't finish installing. Run the installer again." and doesn't try to start.
+- **Detecting a broken install:** the control window checks that `Flip7yoke-server.exe` exists and that `Flip7yoke-server.exe --version` matches the version stamped into `Flip7yoke.ps1` (`$AppVersion`) at build time. That check is written; until the installer build stamps a version, `$AppVersion` is `dev`, which skips it. If not, it says "Flip7yoke didn't finish installing. Run the installer again." and doesn't try to start.
 - **Settings changes between versions:**
   - `config.json` has a `version` number. The new server migrates old versions on first start, after saving a copy as `config.v<old>.json`.
   - `state.json` and `history.json` get the same treatment if their shape ever changes. They're backed up as `*.v<old>.json` before migrating, and the old copy is never overwritten.
@@ -363,7 +406,7 @@ Run on a Windows 11 VM with no Node or Ollama, unless a line says otherwise.
 
 ### Release
 
-- Version number in one place (`package.json` `version`), used by the build, the exe metadata and the installer.
+- Version number in one place (`package.json` `version`, now 0.9.0), used by the build (`--version`), the control window stamp and the installer.
 - `README.md` with screenshots (board, phone, scoring sheet), install steps and build notes.
   - **Unsigned installer:** the first release is unsigned, so Windows SmartScreen shows "Windows protected your PC". The README says why, says to download only from the project's GitHub Releases page, and lists the file's SHA-256 so people can check it's the real one. Only then does it say that **More info**, then **Run anyway**, proceeds. It doesn't present warnings in general as something to click past.
 - `LICENSE` (MIT), plus OFL for Big Shoulders and Barlow and MIT for qrcode-generator 1.4.4.

@@ -15,19 +15,28 @@ It went down very well on the first night (5 Nov). It's an unofficial fan tool, 
 
 Repo: `github.com/Ryan-Clinton/flip7yoke` (private). Branch `main`. Ryan's rule is to commit and push finished work to main without asking.
 
-## Where things are right now (the WSL/Windows split)
+## Where things are right now (updated 5 Nov 2026, after installer Stages 1 to 3)
 
 | Part | Runs on | How |
 |---|---|---|
-| Project files and git | **WSL** `/home/facepipe/flip7` (copied to `C:\projects\flip7yoke` at handover) | |
-| Score keeper `run.js` → `server.js` | **Windows** Node v22 | `node \\wsl.localhost\Ubuntu\home\facepipe\flip7\run.js`, started by the control window |
-| Control window `Flip7.ps1` | **Windows** PowerShell 5.1 WinForms | Desktop shortcut "Flip7yoke" and `start.bat` |
-| Card reader | **WSL**: Ollama 0.40.14 in `~/ollama`, model `qwen3-vl:4b-instruct` on the GTX 1080 (8 GB) | `Flip7.ps1` starts it with `wsl.exe -e bash -lc "... exec ~/ollama/bin/ollama serve"` and writes a PID file to `~/ollama/serve.pid`. Windows reaches it at `127.0.0.1:11434` |
+| Project files and git | **Windows** `C:\Projects\flip7yoke` | The WSL copy `/home/facepipe/flip7` is retired; don't edit it |
+| Score keeper | **Windows** Node v22.20.0 | `node run.js`: the supervisor (`lib/supervisor.js`) runs the server (`main.js --serve`) and restarts it on crashes and code changes. Data, settings and logs live in the project folder |
+| Control window `Flip7.ps1` | **Windows** PowerShell 5.1 WinForms | Desktop shortcut "Flip7yoke" (now points at `C:\Projects\flip7yoke\Flip7.ps1`) and `start.bat` |
+| Settings | `config.json` (gitignored) | Players, subtitle, Wi-Fi, card reader, join address, ports. Edit in the control window's Settings. `.env` was moved in and renamed `.env.migrated` |
+| Card reader | Ollama for Windows 0.40.14 is installed, with the model pulled | **But** the WSL Ollama still holds port 11434 until it's stopped (`kill $(cat ~/ollama/serve.pid)` in WSL), so for now the reader still uses the WSL one |
 | Board | Windows Chrome | `http://localhost:7777/board` |
+| Packaged exe | `dist\Flip7yoke-server.exe` (gitignored) | `npm install`, then `npm run build` |
 
-Ollama is **not** installed on Windows yet (`Get-Command ollama` finds nothing). Windows has Node v22.20 and git 2.50.
+The plan for the installer and what's built so far is in `docs/installer-spec.md`.
 
 ## The job: make it Windows-only, then release it
+
+**Status (5 Nov 2026):**
+- Step 1 is done except the very last line: stopping the WSL Ollama for good.
+- In Step 2, settings, Wi-Fi details and the optional camera are done, and `REGULARS` is gone from the code.
+- `Install.ps1` became the Inno Setup installer plan (Stage 4 of `docs/installer-spec.md`), along with the README, licences and release.
+
+The original plan is kept below for reference.
 
 ### Step 1: run from `C:\projects\flip7yoke` with Ollama for Windows
 1. Install Ollama for Windows (`winget install Ollama.Ollama`). It supports the GTX 1080 (compute 6.1) through its CUDA 12 build. On Linux the CUDA 13 build skipped the card and v12 picked it up; check the server log on Windows shows the GPU being found.
@@ -50,19 +59,26 @@ Ollama is **not** installed on Windows yet (`Get-Command ollama` finds nothing).
 
 | File | What |
 |---|---|
-| `run.js` | Launcher: runs `server.js` and restarts it within ~2s when `server.js`, `public/rules.js` or `.env` change (`fs.watchFile` polling, because change events don't fire on `\\wsl.localhost` paths). Restarts on crash. |
-| `server.js` | Zero-dependency Node HTTP server. Shared state over SSE (`/events`), actions via `POST /api/action` (JSON only: a CORS preflight blocks cross-site posts), `/api/scan` (card reader), `/api/info`, `/api/status`, `/api/history`, static allow-list. Listens on 7777 **and port 80** (`ALSO_PORT`), because one Samsung's Chrome couldn't reach `:7777`. |
+| `run.js` → `main.js` | `main.js` with no arguments is the supervisor (`lib/supervisor.js`); `--serve` is the server (`lib/child.js`); `--version` prints the version. In development the supervisor also restarts the server when `server.js`, `main.js`, `lib/*.js` or `public/rules.js` change. It writes `server.pid.json` and `logs\server.log`. |
+| `server.js` | Zero-dependency Node HTTP server, started by an explicit `start(options)`, so loading it does nothing. Shared state over SSE (`/events`, which also carries `saveError` and `reader`); actions via `POST /api/action` (JSON only: a CORS preflight blocks cross-site posts); `/api/scan` (card reader); `/api/reader/check`; `/api/info`; `/api/status` (with the supervisor's token); `/api/history`; and an allow-list of page files. Refuses requests whose Host isn't this PC (DNS rebinding). Listens on 7777 **and port 80** (`ports.also`), because one Samsung's Chrome couldn't reach `:7777`. |
+| `lib/store.js` | Safe JSON saving: one write at a time, atomic replace, `.bak`, retries, visible errors, `flush()`. |
+| `lib/config.js` | `config.json`: defaults, validation, env precedence, live reload, the one-off move from `.env`. |
+| `lib/reader.js` | Card reader (prompt, schema, `readCards()`, unchanged), plus states off / checking / no-ollama / no-model / ready and a 30s health check. |
+| `lib/net.js`, `lib/paths.js` | The join address; the data folder and page files (from disk, or from inside the exe). |
+| `tools/build.js` | Builds `dist\Flip7yoke-server.exe` (Node single executable) and smoke-tests it. |
+| `tests/` | `npm test`. Set `FLIP7_TEST_EXE` to run the same tests against the exe. Throwaway data goes in `tests/.tmp/` (gitignored). |
 | `public/rules.js` | Scoring for classic, vengeance and brutal. Shared by server (`require`) and browser (`<script>`). |
 | `public/index.html` | The whole front end: phone view `/`, board view `/board`, scoring sheet, menu, history. |
 | `public/style.css` | "The deck on the felt" design: cream card stock, Deco frames, shell fans, a deck colour per player, royal-blue felt. Fonts self-hosted in `public/fonts/`. |
 | `public/qrcode.min.js` | Local copy (sha384 matches the cdnjs 1.4.4 file), so the board works offline. |
 | `Flip7.ps1` | WinForms control window with Start/Stop, live status and buttons. Also `-Action start|stop|status`. |
 | `start.bat` | Opens `Flip7.ps1` hidden-console. |
-| `tools/eval-scans.js` | Card-reader accuracy test against 15 real photos checked by eye. Sends `X-Flip7-Test` so test runs aren't saved to `scans/`. |
-| `.env` | **gitignored.** `WIFI_SSID`, `WIFI_PASSWORD`, `WIFI_AUTH`, used for the board's join-the-Wi-Fi QR. |
-| `state.json` / `history.json` / `scans/` / `logs/` | **gitignored** runtime data: the current game, finished games, the last 30 photos and readings, and server output (`logs/server.log` holds each device's user agent). |
+| `tools/eval-scans.js` | Card-reader accuracy test against 15 real photos checked by eye: `--url`, `--dir`. Fails if a photo is missing, the game isn't on Vengeance, or any reading is wrong. Sends `X-Flip7-Test` so test runs aren't saved to `scans/`. |
+| `tools/stop.js` | Stops a running server properly (through its supervisor) from a terminal. |
+| `config.json` | **gitignored.** Settings (see `config.example.json`). Replaces `.env`. |
+| `state.json` / `history.json` (+ `.bak`) / `scans/` / `logs/` / `server.pid.json` / `server.error.txt` | **gitignored** runtime data: the current game, finished games, the last 30 photos and readings, server output (`logs/server.log` holds each device's user agent), the record of what's running, and the last start failure. |
 
-Env overrides: `PORT` (7777), `ALSO_PORT` (80, 0 = off), `STATE_FILE`, `HISTORY_FILE`, `SCANS_DIR`, `OLLAMA_URL` (`http://127.0.0.1:11434`), `OLLAMA_MODEL` (`qwen3-vl:4b-instruct`).
+Env overrides (they win over `config.json`): `FLIP7_DATA` (data folder), `PORT`, `ALSO_PORT` (0 = off), `STATE_FILE`, `HISTORY_FILE`, `SCANS_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `FLIP7_NO_READER` (never contact Ollama), `FLIP7_AUTO_MS` (auto-finish pause, for tests).
 
 ## Rules as Ryan's group plays them
 - **Classic** (original deck): 0-12, +2..+10, ×2, Flip 7 +15, Second Chance.
@@ -87,8 +103,9 @@ Env overrides: `PORT` (7777), `ALSO_PORT` (80, 0 = off), `STATE_FILE`, `HISTORY_
 - **Older browsers:** no `||=`, `??`, `createImageBitmap` or bare `color-mix()`/`inset` in the front end. Fallback declarations sit before the `color-mix` lines; keep that up.
 - **WinForms:** launching `Flip7.ps1` with `Start-Process -WindowStyle Hidden` hides the **form** too. The shortcut uses `powershell -WindowStyle Hidden -File ...`, which only hides the console. Flat buttons don't grey out when disabled, so `Update-Status` recolours them.
 - **Keep `Flip7.ps1` ASCII only** (PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
-- **Server changes need a restart** to take effect. The launcher does it automatically; pages and CSS are read fresh on every request. After changing anything, restart and **check the live result yourself**. Ryan was annoyed when told to restart things by hand.
-- **Testing from WSL:** headless Chrome via playwright-core (`~/.npm/_npx/.../playwright-core`) against a spare port (`PORT=7799 ALSO_PORT=0 STATE_FILE=... HISTORY_FILE=... SCANS_DIR=...`) so the live game is untouched. On Windows, set up something equivalent.
+- **Server changes need a restart** to take effect. In development the supervisor does it automatically; pages and CSS are read fresh on every request. Settings changes to players, subtitle, Wi-Fi and reader on/off apply live; ports, join address and the reader URL or model apply on the next Start. After changing anything, restart and **check the live result yourself**. Ryan was annoyed when told to restart things by hand.
+- **Testing on Windows:** `npm test`, plus a live server on a spare port with a throwaway data folder (`FLIP7_DATA=tests/.tmp/x PORT=7799 ALSO_PORT=0 node run.js`), so the real game is untouched. Point `OLLAMA_URL` at a test Ollama if needed. For the control window, `Flip7.ps1 -Action start|status|stop|snapshot` with `FLIP7_DATA` set. Never screen-capture to check a window: use `-Action snapshot`, which draws it off-screen.
+- **rcedit:** don't add it back. Every version on npm is marked "no longer supported" (pulled), so the exe keeps Node's icon and description for now.
 
 ## How Ryan wants you to work
 - **Act, don't hand back.** Do restarts and follow-up steps yourself. "Try again" means retry now. He got angry about having to repeat himself.

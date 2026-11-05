@@ -2,7 +2,8 @@
 # Runs standalone, so Start works when nothing else is running. Closing the window leaves the game running.
 # Also usable without the window: Flip7.ps1 -Action start | stop | status
 # Keep this file ASCII only: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
-param([ValidateSet('gui', 'start', 'stop', 'status')] [string]$Action = 'gui')
+#   Flip7.ps1 -Action snapshot -Out <folder> draws the window and Settings to PNGs without showing them.
+param([ValidateSet('gui', 'start', 'stop', 'status', 'snapshot')] [string]$Action = 'gui', [string]$Out = '')
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RunJs = Join-Path $Root 'run.js'
@@ -68,11 +69,30 @@ function Post-Json($url, $body = '{}') {
   try { return Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 15 } catch { return $null }
 }
 
-# The launcher (run.js) and the server it runs (server.js), launcher first so it can't respawn the server.
-function Get-FlipProcs {
-  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-    Where-Object { $_.CommandLine -match 'flip7' -and $_.CommandLine -match '(run|server)\.js' } |
-    Sort-Object { $_.CommandLine -notmatch 'run\.js' }
+# ---- what's running: server.pid.json, written by the supervisor (lib/supervisor.js) ----
+$PidFile = Join-Path $DataDir 'server.pid.json'
+$ErrorFile = Join-Path $DataDir 'server.error.txt'
+$AppVersion = 'dev' # the installer build stamps the release version here
+
+# Is process $id the one recorded: same exe, started within a few seconds of the recorded time?
+function Test-Recorded($id, $exe, $started) {
+  if (-not $id) { return $false }
+  $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+  if (-not $p) { return $false }
+  try {
+    if ($p.Path -ne $exe) { return $false }
+    $want = [datetime]::Parse($started).ToUniversalTime()
+    return [math]::Abs(($p.StartTime.ToUniversalTime() - $want).TotalSeconds) -lt 10
+  } catch { return $false }
+}
+
+# The running server's record, or $null. A stale record (PIDs gone or reused) is deleted.
+function Get-FlipServer {
+  if (-not (Test-Path $PidFile)) { return $null }
+  try { $r = [IO.File]::ReadAllText($PidFile) | ConvertFrom-Json } catch { return $null }
+  if (Test-Recorded $r.supervisorPid $r.exe $r.supervisorStart) { return $r }
+  Remove-Item $PidFile -ErrorAction SilentlyContinue
+  return $null
 }
 
 # Ollama for Windows. If it's already running (the Ollama tray app usually starts it), we use it and leave it
@@ -94,18 +114,48 @@ function Start-Flip {
       -RedirectStandardError (Join-Path $LogDir 'ollama.log') -RedirectStandardOutput (Join-Path $LogDir 'ollama.out.log')
     Set-Content -Path $OllamaPidFile -Value $p.Id -Encoding ascii
   }
-  if (-not (Get-FlipProcs)) {
-    $log = Join-Path $LogDir 'server.log'
-    Start-Process cmd.exe -WindowStyle Hidden -WorkingDirectory $env:USERPROFILE -ArgumentList "/c node `"$RunJs`" > `"$log`" 2>&1"
+  if (Get-FlipServer) { return } # one copy only
+  Remove-Item $ErrorFile -ErrorAction SilentlyContinue
+  # The supervisor writes its own log (logs\server.log) and server.pid.json.
+  if ($Installed) {
+    Start-Process $ServerExe -WindowStyle Hidden -WorkingDirectory $DataDir
+  } else {
+    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+    if (-not $node) { Set-Content -Path $ErrorFile -Value 'Node.js is not installed (needed when running from the project folder).'; return }
+    Start-Process $node -ArgumentList "`"$RunJs`"" -WindowStyle Hidden -WorkingDirectory $Root
   }
 }
 
+# Stop through the supervisor so the last scores are saved. Returns the error text if saving failed, else $null.
 function Stop-Flip {
-  Get-FlipProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  $result = $null
+  $r = Get-FlipServer
+  if ($r) {
+    try {
+      $answer = Invoke-RestMethod -Uri "http://127.0.0.1:$($r.controlPort)/stop" -Method Post -Headers @{ 'x-flip7-token' = $r.token } -TimeoutSec 10
+      if (-not $answer.saved) { $result = "Last scores may not have saved: $($answer.error)" }
+    } catch {
+      # No answer: stop the recorded processes, each only if it is still the one recorded.
+      foreach ($p in @(@($r.childPid, $r.childStart), @($r.supervisorPid, $r.supervisorStart))) {
+        if (Test-Recorded $p[0] $r.exe $p[1]) { Stop-Process -Id $p[0] -Force -ErrorAction SilentlyContinue }
+      }
+      $result = "The score keeper didn't answer, so it was ended. Scores saved up to its last save."
+    }
+    Remove-Item $PidFile -ErrorAction SilentlyContinue
+  }
   # Free the GPU: unload the model whoever runs Ollama, then stop Ollama only if we started it.
   Post-Json "$ReaderUrl/api/generate" ('{"model":"' + $ReaderModel + '","keep_alive":0}') | Out-Null
   $ours = Get-OurOllama
   if ($ours) { Stop-Process -Id $ours.Id -Force -ErrorAction SilentlyContinue; Remove-Item $OllamaPidFile -ErrorAction SilentlyContinue }
+  return $result
+}
+
+# A half-finished install or upgrade: the exe is missing, or isn't the version this script came with.
+function Get-InstallProblem {
+  if (-not $Installed -or $AppVersion -eq 'dev') { return $null }
+  try { $v = (& $ServerExe --version 2>$null | Select-Object -First 1) } catch { $v = $null }
+  if ($v -ne $AppVersion) { return "Flip7yoke didn't finish installing. Run the installer again." }
+  return $null
 }
 
 # What the reader line says, and what its button offers, for each state the server reports.
@@ -124,22 +174,30 @@ function Get-ReaderView($state) {
 }
 
 function Get-FlipStatus {
-  $s = Get-Json "$ScoreUrl/api/status"
-  $score = if ($s) {
+  $r = Get-FlipServer
+  $url = if ($r -and $r.port) { "http://127.0.0.1:$($r.port)" } else { $ScoreUrl }
+  $s = Get-Json "$url/api/status"
+  # Only trust an answer carrying our server's token: anything else on the port is another program.
+  $ours = $s -and $r -and $s.token -eq $r.token
+  $score = if ($ours) {
     $who = if ($s.players.Count) { "$($s.players.Count) players, round $($s.round)" } else { 'no players yet' }
-    if ($s.saveError) { @{ On = $false; Text = "NOT SAVING SCORES: $($s.saveError)" } }
-    else { @{ On = $true; Text = "Running: $($s.devices) device(s) connected, $who ($($s.mode))" } }
-  } elseif (Get-FlipProcs) { @{ On = $null; Text = 'Starting...' } } else { @{ On = $false; Text = 'Stopped' } }
+    if ($s.saveError) { @{ On = $false; Text = "NOT SAVING SCORES: $($s.saveError)"; Running = $true } }
+    else { @{ On = $true; Text = "Running: $($s.devices) device(s) connected, $who ($($s.mode))"; Running = $true } }
+  } elseif ($r) { @{ On = $null; Text = 'Starting...'; Running = $true } }
+  elseif ($s) { @{ On = $false; Text = "Port $($Cfg.ports.main) is in use by another program (see Settings > Ports)"; Running = $false } }
+  else { @{ On = $false; Text = 'Stopped'; Running = $false } }
+  if (-not $ours) { $s = $null }
   $reader = if ($s) { Get-ReaderView $s.reader } else { Get-ReaderView '' }
   $note = $script:ConfigError
+  if (-not $r -and (Test-Path $ErrorFile)) { $note = "Last start failed: $((Get-Content $ErrorFile -TotalCount 1))" }
   if ($s -and $s.configError) { $note = "Settings: $($s.configError)" }
   elseif ($s -and @($s.restartNeeded).Count) { $note = 'Settings changed: press Stop, then Start, to apply them.' }
   return @{ Score = $score; Reader = $reader; Phone = $(if ($s) { $s.joinUrl } else { $null }); Note = $note }
 }
 
 switch ($Action) {
-  'start'  { Start-Flip; return }
-  'stop'   { Stop-Flip; return }
+  'start'  { $p = Get-InstallProblem; if ($p) { $p; exit 1 }; Start-Flip; return }
+  'stop'   { $msg = Stop-Flip; if ($msg) { $msg } else { 'Stopped.' }; return }
   'status' { $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"; if ($st.Note) { $st.Note }; return }
 }
 
@@ -214,7 +272,7 @@ function Update-Status {
   if ($st.Reader.Fix) { $fixBtn.Text = $st.Reader.Fix }
   $phoneLbl.Text = if ($st.Phone) { $st.Phone } else { '-' }
   $noteLbl.Text = if ($st.Note) { $st.Note } else { '' }
-  $running = $st.Score.On -ne $false -or $st.Score.Text -like 'NOT SAVING*'
+  $running = [bool]$st.Score.Running
   $startBtn.Enabled = -not $running
   $stopBtn.Enabled = [bool]$running
   $boardBtn.Enabled = [bool]$running
@@ -244,13 +302,26 @@ function Reload-Config {
 
 $startBtn.Add_Click({
   Reload-Config
+  $problem = Get-InstallProblem
+  if ($problem) { [System.Windows.Forms.MessageBox]::Show($form, $problem, 'Flip7yoke') | Out-Null; return }
   Invoke-Busy 'Starting...' { Start-Flip }
-  # Give it a moment to come up, then open the board on this screen.
-  for ($i = 0; $i -lt 30 -and -not (Get-Json "$ScoreUrl/api/status"); $i++) { Start-Sleep -Milliseconds 300 }
-  if (Get-Json "$ScoreUrl/api/status") { Start-Process "http://localhost:$($Cfg.ports.main)/board" }
+  # Give it a moment to come up, then open the board on this screen (only if it's ours that answered).
+  $ok = $false
+  for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
+    Start-Sleep -Milliseconds 300
+    $r = Get-FlipServer
+    if ($r -and $r.port) { $s = Get-Json "http://127.0.0.1:$($r.port)/api/status"; $ok = $s -and $s.token -eq $r.token }
+    elseif (Test-Path $ErrorFile) { break }
+  }
+  if ($ok) { Start-Process "http://localhost:$($r.port)/board" }
   Update-Status
 })
-$stopBtn.Add_Click({ Invoke-Busy 'Stopping...' { Stop-Flip }; Start-Sleep -Milliseconds 500; Reload-Config; Update-Status })
+$stopBtn.Add_Click({
+  $msg = $null
+  Invoke-Busy 'Stopping...' { $script:stopMsg = Stop-Flip }
+  if ($script:stopMsg) { [System.Windows.Forms.MessageBox]::Show($form, $script:stopMsg, 'Flip7yoke') | Out-Null }
+  Reload-Config; Update-Status
+})
 $boardBtn.Add_Click({ Start-Process "http://localhost:$($Cfg.ports.main)/board" })
 $dataBtn.Add_Click({
   New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
@@ -288,7 +359,8 @@ function Get-WifiKey($ssid) {
   return $null
 }
 
-$settingsBtn.Add_Click({
+# The settings window. With -SnapshotPath it is drawn to that image file instead of shown (README screenshots, checks).
+function Show-Settings($SnapshotPath) {
   $c = Get-Config
   $f = New-Object System.Windows.Forms.Form
   $f.Text = 'Flip7yoke settings'; $f.ClientSize = New-Object System.Drawing.Size(480, 600)
@@ -313,7 +385,7 @@ $settingsBtn.Add_Click({
   $detect = New-Button 'Detect' 358 231 106 28 $panel $ink $f; $detect.Font = $form.Font
   New-Label 'Password' 16 268 80 22 10 $false $ink $f | Out-Null
   $pw = & $tb 100 266 250 26 ([string]$c.wifi.password)
-  $readKey = New-Button 'Read from Windows' 358 265 106 28 $panel $ink $f; $readKey.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+  $readKey = New-Button 'From Windows' 358 265 106 28 $panel $ink $f; $readKey.Font = $form.Font
   $show = New-Object System.Windows.Forms.CheckBox
   $show.Text = 'Show the network and password on the board'; $show.Checked = [bool]$c.wifi.showOnBoard
   $show.Location = New-Object System.Drawing.Point(16, 298); $show.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($show)
@@ -380,10 +452,34 @@ $settingsBtn.Add_Click({
     try { Save-Config $c } catch { [System.Windows.Forms.MessageBox]::Show($f, "Couldn't save settings: $($_.Exception.Message)", 'Flip7yoke') | Out-Null; return }
     $f.Close()
   })
+  if ($SnapshotPath) { Save-Snapshot $f $SnapshotPath; $f.Dispose(); return }
   [void]$f.ShowDialog($form)
   $subLbl.Text = [string](Get-Config).subtitle
   Update-Status
-})
+}
+$settingsBtn.Add_Click({ Show-Settings })
+
+# Draw a window to a PNG without putting it on screen.
+function Save-Snapshot($win, $path) {
+  # Controls only exist once a window is shown, so show it off-screen and fully transparent for a moment.
+  $win.StartPosition = 'Manual'; $win.Location = New-Object System.Drawing.Point(-20000, -20000)
+  $win.ShowInTaskbar = $false; $win.Opacity = 0
+  $win.Show(); [System.Windows.Forms.Application]::DoEvents()
+  $bmp = New-Object System.Drawing.Bitmap -ArgumentList $win.Width, $win.Height
+  $win.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle -ArgumentList 0, 0, $win.Width, $win.Height))
+  $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+  $bmp.Dispose()
+  $win.Hide()
+}
+
+if ($Action -eq 'snapshot') {
+  New-Item -ItemType Directory -Force -Path $Out | Out-Null
+  Update-Status
+  Save-Snapshot $form (Join-Path $Out 'control-window.png')
+  Show-Settings (Join-Path $Out 'settings-window.png')
+  "Saved control-window.png and settings-window.png in $Out"
+  return
+}
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 2000

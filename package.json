@@ -1,0 +1,18 @@
+{
+  "name": "flip7yoke",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Unofficial score keeper for Flip 7 game nights. Not affiliated with The Op.",
+  "license": "MIT",
+  "scripts": {
+    "start": "node run.js",
+    "test": "node --test tests/game.test.js tests/lifecycle.test.js",
+    "build": "node tools/build.js"
+  },
+  "engines": {
+    "node": "22.20.0"
+  },
+  "devDependencies": {
+    "postject": "1.0.0-alpha.6"
+  }
+}

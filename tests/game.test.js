@@ -82,7 +82,7 @@ async function startGame(dir) {
   return {
     url,
     stop: () => new Promise(resolve => {
-      child.once('message', m => resolve({ saved: m.saved, error: m.error }));
+      child.on('message', m => { if (m && m.stopped) resolve({ saved: m.saved, error: m.error }); });
       child.send({ stop: true });
     }),
   };
