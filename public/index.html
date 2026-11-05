@@ -16,6 +16,7 @@
   <span class="mode" id="modeTag" hidden></span>
   <span class="dot" id="conn" title="Live connection"></span>
   <button id="shareBtn">Join</button>
+  <button id="historyBtn">History</button>
   <button id="menuBtn">⋯</button>
 </header>
 <main id="app"></main>
@@ -23,6 +24,7 @@
 
 <div class="sheet" id="entrySheet"><div id="entryBody"></div></div>
 <div class="sheet" id="menuSheet"><div id="menuBody"></div></div>
+<div class="sheet" id="historySheet"><div id="historyBody"></div></div>
 <div class="sheet" id="shareSheet"><div>
   <h3>Join on your phone</h3>
   <p class="muted">Connect to the same Wi-Fi, then scan or type:</p>
@@ -74,6 +76,7 @@ function render() {
   tag.textContent = MODE_NAMES[mode()];
   $('#menuBtn').hidden = !BOARD;
   $('#shareBtn').hidden = BOARD; // the board shows the join QR permanently
+  $('#historyBtn').hidden = !BOARD; // phones get a "Past games" link instead, to keep their header uncluttered
   if (BOARD) renderBoard(); else renderPhone();
   if ($('#menuSheet').classList.contains('open')) renderMenu();
 }
@@ -136,7 +139,7 @@ function renderPhone() {
   }
   html += `<h2>Standings</h2><div class="card">${ranked.map((p, i) => `<div class="stand ${p.id === me.id ? 'you' : ''}">
       <span><i class="pc" style="background:${pcOf(p.id)}"></i>${i + 1}. ${esc(p.name)} ${S.draft[p.id] ? '<span class="done">✓</span>' : ''}</span><b class="${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</b></div>`).join('')}</div>
-    <p class="muted" style="text-align:center">Not ${esc(me.name)}? <button class="ghost" id="notMe">Switch player</button></p>`;
+    <p class="muted" style="text-align:center">Not ${esc(me.name)}? <button class="ghost" id="notMe">Switch player</button> · <button class="ghost" data-history>Past games</button></p>`;
   app.innerHTML = html;
   const mine = $('#mine');
   if (mine) mine.onclick = () => openEntry(me.id);
@@ -489,7 +492,56 @@ function renderMenu() {
     act('setMode', { mode: el.dataset.mode });
   });
   $('#setTarget').onclick = () => act('setTarget', { target: +$('#target').value });
-  $('#newGame').onclick = () => { if (confirm('Start a new game? All scores are cleared.')) { act('newGame'); closeSheets(); } };
+  $('#newGame').onclick = () => { if (confirm('Start a new game? This game is saved to History first.')) { act('newGame'); closeSheets(); } };
+  bindClose();
+}
+
+// ---- history: past games and the regulars' leaderboard ----
+const fmtDate = t => t ? new Date(t).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
+async function openHistory() {
+  $('#historyBody').innerHTML = '<h3>History</h3><p class="muted">Loading…</p>';
+  $('#historySheet').classList.add('open');
+  let games = [];
+  try { games = await (await fetch('/api/history')).json(); } catch {}
+  drawHistory(games);
+}
+function drawHistory(games) {
+  // leaderboard by name: every saved game counts as played; wins only from games that reached the target
+  const stats = {};
+  for (const g of games) for (const p of g.players) {
+    const s = stats[p.name] = stats[p.name] || { name: p.name, played: 0, wins: 0, best: -Infinity, sum: 0 };
+    s.played++; s.sum += p.total; s.best = Math.max(s.best, p.total);
+    if (g.winners.includes(p.name)) s.wins++;
+  }
+  const board = Object.values(stats).sort((a, b) => b.wins - a.wins || b.sum / b.played - a.sum / a.played);
+  const finished = games.filter(g => g.complete).length;
+  let html = `<h3>History</h3>`;
+  if (!games.length) {
+    html += `<p class="muted">No saved games yet. A game is saved here when you press New game.</p>`;
+  } else {
+    html += `<div class="label">Leaderboard</div>
+      <div class="scroll"><table class="lb"><tr><th style="text-align:left">Player</th><th>Wins</th><th>Games</th><th>Best</th><th>Average</th></tr>
+      ${board.map(s => `<tr><td style="text-align:left">${esc(s.name)}</td><td><b>${s.wins}</b></td><td>${s.played}</td><td>${s.best}</td><td>${Math.round(s.sum / s.played)}</td></tr>`).join('')}
+      </table></div>
+      <p class="muted" style="margin:6px 0 0">${games.length} game${games.length === 1 ? '' : 's'} saved, ${finished} played to the end. Wins only count for games that reached the target.</p>
+      <div class="label">Games</div>
+      ${games.map(g => `<details class="past">
+        <summary><span class="when">${fmtDate(g.endedAt)}</span>
+          <span class="who">${g.complete ? `🏆 ${g.winners.map(esc).join(' & ')} ${g.players[0].total}` : 'Unfinished'}</span>
+          <span class="muted">${MODE_NAMES[g.mode] || g.mode} · ${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}</span></summary>
+        <div class="scroll"><table><tr><th>#</th>${g.players.map(p => `<th>${esc(p.name)}</th>`).join('')}</tr>
+          ${g.rounds.map((r, i) => `<tr><td class="muted">${i + 1}</td>${g.players.map(p => r.zero.includes(p.name) ? '<td class="wiped" title="Total wiped to 0">⓪</td>' : `<td>${r.scores[p.name] || 0}</td>`).join('')}</tr>`).join('')}
+          <tr class="tot"><td>Total</td>${g.players.map(p => `<td>${p.total}</td>`).join('')}</tr></table></div>
+        ${BOARD ? `<p style="text-align:right;margin:4px 0 0"><button class="ghost" data-delgame="${g.id}">Delete this game</button></p>` : ''}
+      </details>`).join('')}`;
+  }
+  html += `<div class="actions" style="grid-template-columns:1fr"><button data-close>Done</button></div>`;
+  $('#historyBody').innerHTML = html;
+  $('#historyBody').querySelectorAll('[data-delgame]').forEach(el => el.onclick = async () => {
+    if (!confirm('Delete this game from History? This can’t be undone.')) return;
+    await act('deleteHistory', { id: el.dataset.delgame });
+    openHistory();
+  });
   bindClose();
 }
 
@@ -498,6 +550,8 @@ function bindClose() { document.querySelectorAll('[data-close]').forEach(el => e
 document.querySelectorAll('.sheet').forEach(s => s.onclick = ev => { if (ev.target === s) closeSheets(); });
 
 $('#menuBtn').onclick = () => { renderMenu(); $('#menuSheet').classList.add('open'); };
+$('#historyBtn').onclick = openHistory;
+document.addEventListener('click', ev => { if (ev.target.closest('[data-history]')) openHistory(); });
 $('#commitBtn').onclick = () => {
   const missing = S.players.filter(p => !S.draft[p.id]);
   if (missing.length && !confirm(`${missing.map(p => p.name).join(', ')} not scored yet. They get 0. Finish anyway?`)) return;

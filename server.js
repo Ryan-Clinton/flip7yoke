@@ -11,6 +11,12 @@ const INDEX = path.join(__dirname, 'public', 'index.html');
 const fresh = () => ({ mode: 'classic', zeroRule: 'total', target: 200, players: [], rounds: [], draft: {}, version: 0 });
 let state = fresh();
 try { state = { ...fresh(), ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch {}
+
+// Finished games, newest first. Kept by player name, since player ids are per game.
+const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, 'history.json');
+let history = [];
+try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); } catch {}
+const saveHistory = () => fs.writeFile(HISTORY_FILE, JSON.stringify(history, null, 2), () => {});
 state.finishing = false; // the auto-finish timer doesn't survive a restart
 
 const clients = new Set();
@@ -39,6 +45,31 @@ try {
 const MODES = ['classic', 'vengeance', 'brutal'];
 // Names shown under "Played before? Tap your name". Tapping one joins the game as that player.
 const REGULARS = ['Ryan', 'Gareth', 'Rossi', 'Chris', 'Carlo', 'Jarvis', 'Rita'];
+
+// Save the current game to history (called before New game clears it). Games with no rounds are skipped.
+function archiveGame() {
+  if (!state.rounds.length || !state.players.length) return;
+  const totals = Rules.totals(state);
+  const name = id => (state.players.find(p => p.id === id) || {}).name;
+  const players = state.players.map(p => ({ name: p.name, total: totals[p.id] })).sort((a, b) => b.total - a.total);
+  const best = players[0].total;
+  const complete = best >= state.target;
+  const times = state.rounds.map(r => r.at).filter(Boolean);
+  history.unshift({
+    id: uid(),
+    endedAt: times.length ? Math.max(...times) : Date.now(),
+    startedAt: times.length ? Math.min(...times) : null,
+    mode: state.mode, target: state.target, complete,
+    winners: complete ? players.filter(p => p.total === best).map(p => p.name) : [],
+    players,
+    rounds: state.rounds.map(r => ({
+      at: r.at || null,
+      scores: Object.fromEntries(state.players.map(p => [p.name, r.scores[p.id] || 0])),
+      zero: (r.zero || []).map(name).filter(Boolean),
+    })),
+  });
+  saveHistory();
+}
 
 // Wi-Fi details from .env (kept out of git), shown on the board with a join-the-Wi-Fi QR code.
 function readEnv() {
@@ -110,7 +141,7 @@ const actions = {
         if (Rules.isFlip7(e) && e.hit in scores && e.hit !== p.id) scores[e.hit] -= 15;
       }
     }
-    state.rounds.push({ scores, zero });
+    state.rounds.push({ scores, zero, at: Date.now() });
     state.draft = {};
   },
   editScore({ round, id, score }) {
@@ -129,7 +160,12 @@ const actions = {
   },
   deleteRound({ round }) { state.rounds.splice(round, 1); },
   setTarget({ target }) { if (Number.isFinite(target) && target > 0) state.target = Math.trunc(target); },
-  newGame() { state.rounds = []; state.draft = {}; },
+  newGame() { archiveGame(); state.rounds = []; state.draft = {}; },
+  deleteHistory({ id }) {
+    const before = history.length;
+    history = history.filter(g => g.id !== id);
+    if (history.length !== before) saveHistory();
+  },
 };
 
 // Once every player has sent a score, finish the round after a short pause (time to fix a typo).
@@ -323,6 +359,10 @@ const mainServer = http.createServer((req, res) => {
       }
     });
     return;
+  }
+  if (req.url === '/api/history') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify(history));
   }
   if (req.url === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
