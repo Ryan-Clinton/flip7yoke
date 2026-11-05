@@ -269,7 +269,7 @@ function warmReader() {
 }
 warmReader();
 
-http.createServer((req, res) => {
+const mainServer = http.createServer((req, res) => {
   if (req.url === '/events') {
     // Which browser each device uses, for diagnosing a phone that can't show the page.
     console.log(`${new Date().toLocaleTimeString()} device connected: ${req.socket.remoteAddress} ${req.headers['user-agent'] || '?'}`);
@@ -345,3 +345,11 @@ http.createServer((req, res) => {
   console.log('Flip 7 score keeper running. Open on any device on the Wi-Fi:');
   for (const u of lanUrls()) console.log('  ' + u);
 });
+
+// Also answer on the standard web port, so a phone that blocks unusual ports can use http://<ip> with no number.
+const ALSO_PORT = process.env.ALSO_PORT === undefined ? 80 : Number(process.env.ALSO_PORT);
+if (ALSO_PORT && ALSO_PORT !== PORT) {
+  http.createServer(mainServer.listeners('request')[0])
+    .on('error', e => console.log(`Port ${ALSO_PORT} not available (${e.code}); phones use :${PORT}`))
+    .listen(ALSO_PORT, '0.0.0.0', () => console.log(`Also answering on port ${ALSO_PORT} (no :${PORT} needed)`));
+}
