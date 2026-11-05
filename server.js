@@ -118,7 +118,7 @@ function scheduleAuto() {
 
 // ---- card reader: a local vision model in Ollama turns a photo of a hand into cards ----
 const OLLAMA = new URL(process.env.OLLAMA_URL || 'http://127.0.0.1:11434');
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5vl:7b';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3-vl:4b-instruct' // ~2s per photo on a GTX 1080, read both test hands exactly;
 
 const CARD_GUIDE = {
   classic: `Number cards show one big number from 0 to 12.
@@ -166,6 +166,8 @@ async function scanCards(imageB64) {
   const reply = await ollamaChat({
     model: OLLAMA_MODEL,
     stream: false,
+    think: false, // answer straight away; reasoning first is slow on a GTX 1080 and made results wobble
+    keep_alive: '2h', // stay loaded on the GPU between rounds so later scans are quick
     format: SCAN_SCHEMA,
     options: { temperature: 0 },
     messages: [{
@@ -174,6 +176,7 @@ async function scanCards(imageB64) {
       content: `This photo shows one player's hand from the card game Flip 7${V ? ' With a Vengeance' : ''}, laid out on a table.
 ${CARD_GUIDE[V ? 'vengeance' : 'classic']}
 List every card you can see. Ignore action cards, card backs and anything that is not a card.
+Each card goes in exactly one list: a card printed with a sign (+, -, x, ÷) is a modifier, never a number card.
 Read the big number in the middle or corner of each card. Do not guess cards you cannot see.`,
     }],
   });
