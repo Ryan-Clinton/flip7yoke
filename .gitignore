@@ -7,3 +7,12 @@ scans/
 logs/
 history.json
 tests/.tmp/
+config.json
+config.json.bak
+config.json.tmp
+.env.migrated
+*.bak
+*.tmp
+server.pid.json
+dist/
+build/

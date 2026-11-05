@@ -1,23 +1,71 @@
-# Flip 7 control window: start and stop the score keeper (Node) and the card reader (Ollama for Windows).
+# Flip 7 control window: start and stop the score keeper and the card reader (Ollama for Windows), and settings.
 # Runs standalone, so Start works when nothing else is running. Closing the window leaves the game running.
 # Also usable without the window: Flip7.ps1 -Action start | stop | status
+# Keep this file ASCII only: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 param([ValidateSet('gui', 'start', 'stop', 'status')] [string]$Action = 'gui')
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RunJs = Join-Path $Root 'run.js'
-$LogDir = Join-Path $Root 'logs'
-$ScoreUrl = 'http://127.0.0.1:7777'
-$ReaderUrl = 'http://127.0.0.1:11434'
+$ServerExe = Join-Path $Root 'Flip7yoke-server.exe'
+$Installed = Test-Path $ServerExe
 
-function Get-Json($url) {
+# Data and settings: FLIP7_DATA, else %LOCALAPPDATA%\Flip7yoke when installed, else the project folder (same rule
+# as lib/paths.js).
+$DataDir = if ($env:FLIP7_DATA) { $env:FLIP7_DATA } elseif ($Installed) { Join-Path $env:LOCALAPPDATA 'Flip7yoke' } else { $Root }
+$LogDir = Join-Path $DataDir 'logs'
+$ConfigFile = Join-Path $DataDir 'config.json'
+$OllamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+$OllamaPidFile = Join-Path $LogDir 'ollama.pid'
+$Utf8 = New-Object System.Text.UTF8Encoding $false
+
+# ---- settings (config.json); the server checks every value too, this is the same set of defaults ----
+function Get-Config {
+  $c = [ordered]@{
+    version = 1; players = @(); subtitle = ''
+    wifi = [ordered]@{ ssid = ''; password = ''; auth = 'WPA'; showOnBoard = $true }
+    cardReader = [ordered]@{ enabled = 'auto'; model = 'qwen3-vl:4b-instruct'; url = 'http://127.0.0.1:11434' }
+    network = [ordered]@{ address = 'auto' }
+    ports = [ordered]@{ main = 7777; also = 80 }
+  }
+  $script:ConfigError = $null
+  if (Test-Path $ConfigFile) {
+    try {
+      $raw = [IO.File]::ReadAllText($ConfigFile) | ConvertFrom-Json
+      if ($raw.players) { $c.players = @($raw.players | ForEach-Object { [string]$_ }) }
+      if ($null -ne $raw.subtitle) { $c.subtitle = [string]$raw.subtitle }
+      foreach ($sect in 'wifi', 'cardReader', 'network', 'ports') {
+        if ($raw.$sect) { foreach ($k in @($c[$sect].Keys)) { if ($null -ne $raw.$sect.$k) { $c[$sect][$k] = $raw.$sect.$k } } }
+      }
+    } catch { $script:ConfigError = "config.json has an error: $($_.Exception.Message)" }
+  }
+  return $c
+}
+
+function Save-Config($c) {
+  New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+  if (Test-Path $ConfigFile) { Copy-Item $ConfigFile "$ConfigFile.bak" -Force }
+  $json = $c | ConvertTo-Json -Depth 5
+  [IO.File]::WriteAllText("$ConfigFile.tmp", $json + "`n", $Utf8)
+  Move-Item "$ConfigFile.tmp" $ConfigFile -Force
+}
+
+$Cfg = Get-Config
+$ScoreUrl = "http://127.0.0.1:$($Cfg.ports.main)"
+$ReaderUrl = [string]$Cfg.cardReader.url
+$ReaderModel = [string]$Cfg.cardReader.model
+
+function Get-Json($url, $timeout = 800) {
   try {
     $req = [System.Net.WebRequest]::Create($url)
-    $req.Timeout = 800
+    $req.Timeout = $timeout
     $resp = $req.GetResponse()
     $text = (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd()
     $resp.Close()
     return $text | ConvertFrom-Json
   } catch { return $null }
+}
+function Post-Json($url, $body = '{}') {
+  try { return Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 15 } catch { return $null }
 }
 
 # The launcher (run.js) and the server it runs (server.js), launcher first so it can't respawn the server.
@@ -29,10 +77,6 @@ function Get-FlipProcs {
 
 # Ollama for Windows. If it's already running (the Ollama tray app usually starts it), we use it and leave it
 # running; we only ever stop an ollama.exe that we started ourselves, recorded by PID in logs\ollama.pid.
-$OllamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
-$OllamaPidFile = Join-Path $LogDir 'ollama.pid'
-$ReaderModel = 'qwen3-vl:4b-instruct'
-
 function Get-OurOllama {
   if (-not (Test-Path $OllamaPidFile)) { return $null }
   $id = [int](Get-Content $OllamaPidFile -TotalCount 1)
@@ -43,14 +87,14 @@ function Get-OurOllama {
 }
 
 function Start-Flip {
-  if (-not (Get-Json "$ReaderUrl/api/version") -and (Test-Path $OllamaExe)) {
-    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+  $readerOn = $Cfg.cardReader.enabled -ne $false
+  if ($readerOn -and -not (Get-Json "$ReaderUrl/api/version") -and (Test-Path $OllamaExe)) {
     $p = Start-Process $OllamaExe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
       -RedirectStandardError (Join-Path $LogDir 'ollama.log') -RedirectStandardOutput (Join-Path $LogDir 'ollama.out.log')
     Set-Content -Path $OllamaPidFile -Value $p.Id -Encoding ascii
   }
   if (-not (Get-FlipProcs)) {
-    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $log = Join-Path $LogDir 'server.log'
     Start-Process cmd.exe -WindowStyle Hidden -WorkingDirectory $env:USERPROFILE -ArgumentList "/c node `"$RunJs`" > `"$log`" 2>&1"
   }
@@ -59,39 +103,44 @@ function Start-Flip {
 function Stop-Flip {
   Get-FlipProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   # Free the GPU: unload the model whoever runs Ollama, then stop Ollama only if we started it.
-  try {
-    $body = '{"model":"' + $ReaderModel + '","keep_alive":0}'
-    Invoke-RestMethod -Uri "$ReaderUrl/api/generate" -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 5 | Out-Null
-  } catch {}
+  Post-Json "$ReaderUrl/api/generate" ('{"model":"' + $ReaderModel + '","keep_alive":0}') | Out-Null
   $ours = Get-OurOllama
   if ($ours) { Stop-Process -Id $ours.Id -Force -ErrorAction SilentlyContinue; Remove-Item $OllamaPidFile -ErrorAction SilentlyContinue }
+}
+
+# What the reader line says, and what its button offers, for each state the server reports.
+function Get-ReaderView($state) {
+  switch ($state) {
+    'ready'     { return @{ On = $true; Text = 'Ready: phones show the camera button'; Fix = $null } }
+    'checking'  { return @{ On = $null; Text = 'Checking...'; Fix = $null } }
+    'off'       { return @{ On = $null; Text = 'Turned off in Settings (no camera button)'; Fix = $null } }
+    'no-model'  { return @{ On = $false; Text = "Ollama is running, but the card model isn't downloaded"; Fix = 'Download model (3.3 GB)' } }
+    'no-ollama' {
+      if (-not (Test-Path $OllamaExe)) { return @{ On = $false; Text = "Ollama isn't installed (no camera button)"; Fix = 'Install Ollama' } }
+      return @{ On = $false; Text = "Ollama isn't answering (no camera button)"; Fix = 'Check again' }
+    }
+  }
+  return @{ On = $false; Text = 'Starts with the score keeper'; Fix = $null }
 }
 
 function Get-FlipStatus {
   $s = Get-Json "$ScoreUrl/api/status"
   $score = if ($s) {
     $who = if ($s.players.Count) { "$($s.players.Count) players, round $($s.round)" } else { 'no players yet' }
-    @{ On = $true; Text = "Running: $($s.devices) device(s) connected, $who ($($s.mode))" }
+    if ($s.saveError) { @{ On = $false; Text = "NOT SAVING SCORES: $($s.saveError)" } }
+    else { @{ On = $true; Text = "Running: $($s.devices) device(s) connected, $who ($($s.mode))" } }
   } elseif (Get-FlipProcs) { @{ On = $null; Text = 'Starting...' } } else { @{ On = $false; Text = 'Stopped' } }
-
-  $phone = if ($s) { @($s.urls | Where-Object { $_ -match '//(192\.168|10\.)' })[0] } else { $null }
-
-  $reader = if (Get-Json "$ReaderUrl/api/version") {
-    $ps = Get-Json "$ReaderUrl/api/ps"
-    if ($ps -and $ps.models.Count) {
-      $gb = [math]::Round($ps.models[0].size_vram / 1GB, 1)
-      @{ On = $true; Text = "Running: model loaded on the GPU ($gb GB)" }
-    } else { @{ On = $true; Text = 'Running: model loads on the first photo' } }
-  } elseif (-not (Test-Path $OllamaExe)) { @{ On = $false; Text = 'Not installed (the camera button is hidden)' } }
-  else { @{ On = $false; Text = 'Stopped' } }
-
-  return @{ Score = $score; Reader = $reader; Phone = $phone }
+  $reader = if ($s) { Get-ReaderView $s.reader } else { Get-ReaderView '' }
+  $note = $script:ConfigError
+  if ($s -and $s.configError) { $note = "Settings: $($s.configError)" }
+  elseif ($s -and @($s.restartNeeded).Count) { $note = 'Settings changed: press Stop, then Start, to apply them.' }
+  return @{ Score = $score; Reader = $reader; Phone = $(if ($s) { $s.joinUrl } else { $null }); Note = $note }
 }
 
 switch ($Action) {
   'start'  { Start-Flip; return }
   'stop'   { Stop-Flip; return }
-  'status' { $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"; return }
+  'status' { $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"; if ($st.Note) { $st.Note }; return }
 }
 
 # ---- the window ----
@@ -108,7 +157,7 @@ $red = [System.Drawing.Color]::FromArgb(255, 93, 115)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Flip7yoke'
-$form.ClientSize = New-Object System.Drawing.Size(460, 330)
+$form.ClientSize = New-Object System.Drawing.Size(460, 410)
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -116,36 +165,42 @@ $form.BackColor = $navy
 $form.ForeColor = $ink
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 10)
 
-function New-Label($text, $x, $y, $w, $h, $size = 10, $bold = $false, $color = $ink) {
+function New-Label($text, $x, $y, $w, $h, $size = 10, $bold = $false, $color = $ink, $parent = $form) {
   $l = New-Object System.Windows.Forms.Label
   $l.Text = $text; $l.Location = New-Object System.Drawing.Point($x, $y); $l.Size = New-Object System.Drawing.Size($w, $h)
   $l.ForeColor = $color
   $l.Font = New-Object System.Drawing.Font('Segoe UI', $size, $(if ($bold) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }))
-  $form.Controls.Add($l); return $l
+  $parent.Controls.Add($l); return $l
 }
-function New-Button($text, $x, $y, $w, $h, $back, $fore) {
+function New-Button($text, $x, $y, $w, $h, $back, $fore, $parent = $form) {
   $b = New-Object System.Windows.Forms.Button
   $b.Text = $text; $b.Location = New-Object System.Drawing.Point($x, $y); $b.Size = New-Object System.Drawing.Size($w, $h)
   $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 0; $b.BackColor = $back; $b.ForeColor = $fore
   $b.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
   $b.Cursor = 'Hand'
-  $form.Controls.Add($b); return $b
+  $parent.Controls.Add($b); return $b
 }
 
-New-Label 'Flip7yoke' 20 14 260 34 18 $true $gold | Out-Null
-New-Label 'Thursday game night' 210 24 230 22 10 $false $muted | Out-Null
+New-Label 'Flip7yoke' 20 14 180 34 18 $true $gold | Out-Null
+$subLbl = New-Label ([string]$Cfg.subtitle) 200 24 240 22 10 $false $muted
 New-Label 'SCORE KEEPER' 20 62 420 18 8 $true $muted | Out-Null
 $scoreLbl = New-Label '...' 20 80 420 22 10
 New-Label 'CARD READER' 20 112 420 18 8 $true $muted | Out-Null
 $readerLbl = New-Label '...' 20 130 420 22 10
-New-Label 'PHONES JOIN AT' 20 162 420 18 8 $true $muted | Out-Null
-$phoneLbl = New-Label '-' 20 180 420 26 12 $true $gold
+$fixBtn = New-Button 'Fix' 20 154 200 28 $panel $gold
+$fixBtn.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$fixBtn.Visible = $false
+New-Label 'PHONES JOIN AT' 20 192 420 18 8 $true $muted | Out-Null
+$phoneLbl = New-Label '-' 20 210 420 26 12 $true $gold
+$noteLbl = New-Label '' 20 240 420 36 9 $false $gold
 
-$startBtn = New-Button 'Start' 20 220 205 46 $green $navy
-$stopBtn = New-Button 'Stop' 235 220 205 46 $red ([System.Drawing.Color]::White)
-$boardBtn = New-Button 'Open scoreboard' 20 276 205 36 $panel $ink
-$photosBtn = New-Button 'Open photos folder' 235 276 205 36 $panel $ink
-$boardBtn.Font = $photosBtn.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+$startBtn = New-Button 'Start' 20 280 205 46 $green $navy
+$stopBtn = New-Button 'Stop' 235 280 205 46 $red ([System.Drawing.Color]::White)
+$boardBtn = New-Button 'Open scoreboard' 20 336 135 36 $panel $ink
+$settingsBtn = New-Button 'Settings' 162 336 135 36 $panel $ink
+$dataBtn = New-Button 'Open data folder' 305 336 135 36 $panel $ink
+$boardBtn.Font = $settingsBtn.Font = $dataBtn.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+New-Label "Data: $DataDir" 20 380 420 20 8 $false $muted | Out-Null
 
 $busy = $false
 function Update-Status {
@@ -155,11 +210,14 @@ function Update-Status {
     $pair[0].Text = $pair[1].Text
     $pair[0].ForeColor = if ($pair[1].On -eq $true) { $green } elseif ($pair[1].On -eq $false) { $red } else { $gold }
   }
+  $fixBtn.Visible = [bool]$st.Reader.Fix
+  if ($st.Reader.Fix) { $fixBtn.Text = $st.Reader.Fix }
   $phoneLbl.Text = if ($st.Phone) { $st.Phone } else { '-' }
-  $running = $st.Score.On -or $st.Reader.On
-  $startBtn.Enabled = -not ($st.Score.On -and $st.Reader.On)
+  $noteLbl.Text = if ($st.Note) { $st.Note } else { '' }
+  $running = $st.Score.On -ne $false -or $st.Score.Text -like 'NOT SAVING*'
+  $startBtn.Enabled = -not $running
   $stopBtn.Enabled = [bool]$running
-  $boardBtn.Enabled = [bool]$st.Score.On
+  $boardBtn.Enabled = [bool]$running
   # Flat buttons don't grey out on their own, so show which one is usable.
   $startBtn.BackColor = if ($startBtn.Enabled) { $green } else { $panel }
   $startBtn.ForeColor = if ($startBtn.Enabled) { $navy } else { $muted }
@@ -176,19 +234,155 @@ function Invoke-Busy($label, [scriptblock]$work) {
   try { & $work } finally { $script:busy = $false }
 }
 
+function Reload-Config {
+  $script:Cfg = Get-Config
+  $script:ScoreUrl = "http://127.0.0.1:$($Cfg.ports.main)"
+  $script:ReaderUrl = [string]$Cfg.cardReader.url
+  $script:ReaderModel = [string]$Cfg.cardReader.model
+  $subLbl.Text = [string]$Cfg.subtitle
+}
+
 $startBtn.Add_Click({
+  Reload-Config
   Invoke-Busy 'Starting...' { Start-Flip }
-  # Give both a moment to come up, then open the board on this screen.
+  # Give it a moment to come up, then open the board on this screen.
   for ($i = 0; $i -lt 30 -and -not (Get-Json "$ScoreUrl/api/status"); $i++) { Start-Sleep -Milliseconds 300 }
-  if (Get-Json "$ScoreUrl/api/status") { Start-Process "$ScoreUrl/board".Replace('127.0.0.1', 'localhost') }
+  if (Get-Json "$ScoreUrl/api/status") { Start-Process "http://localhost:$($Cfg.ports.main)/board" }
   Update-Status
 })
-$stopBtn.Add_Click({ Invoke-Busy 'Stopping...' { Stop-Flip }; Start-Sleep -Milliseconds 500; Update-Status })
-$boardBtn.Add_Click({ Start-Process 'http://localhost:7777/board' })
-$photosBtn.Add_Click({
-  $dir = Join-Path $Root 'scans'
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  Start-Process explorer.exe $dir
+$stopBtn.Add_Click({ Invoke-Busy 'Stopping...' { Stop-Flip }; Start-Sleep -Milliseconds 500; Reload-Config; Update-Status })
+$boardBtn.Add_Click({ Start-Process "http://localhost:$($Cfg.ports.main)/board" })
+$dataBtn.Add_Click({
+  New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+  Start-Process explorer.exe $DataDir
+})
+$fixBtn.Add_Click({
+  switch -Wildcard ($fixBtn.Text) {
+    'Install Ollama' {
+      if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'winget install --id Ollama.Ollama -e; Write-Host; Read-Host "Done. Press Enter to close"'
+      } else { Start-Process 'https://ollama.com/download' }
+    }
+    'Download model*' {
+      $cmd = "& '$OllamaExe' pull $ReaderModel; Write-Host; Read-Host 'Done. Press Enter to close'"
+      Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', $cmd
+    }
+    default { }
+  }
+  # Every fix ends with a fresh check, so the camera button appears as soon as the reader is ready.
+  Post-Json "$ScoreUrl/api/reader/check" | Out-Null
+  Update-Status
+})
+
+# ---- settings window ----
+function Get-WifiNow {
+  # The network this PC is on now. netsh output is in the Windows display language; we read the SSID line by shape.
+  $out = netsh wlan show interfaces 2>$null
+  foreach ($line in $out) { if ($line -match '^\s*SSID\s*:\s*(.+?)\s*$') { return $Matches[1] } }
+  return $null
+}
+function Get-WifiKey($ssid) {
+  # Needs the profile to be readable by this user; can fail on policy, permissions or non-English Windows.
+  $out = netsh wlan show profile name="$ssid" key=clear 2>$null
+  foreach ($line in $out) { if ($line -match '^\s*Key Content\s*:\s*(.*?)\s*$') { return $Matches[1] } }
+  return $null
+}
+
+$settingsBtn.Add_Click({
+  $c = Get-Config
+  $f = New-Object System.Windows.Forms.Form
+  $f.Text = 'Flip7yoke settings'; $f.ClientSize = New-Object System.Drawing.Size(480, 600)
+  $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.StartPosition = 'CenterParent'
+  $f.BackColor = $navy; $f.ForeColor = $ink; $f.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+  $tb = {
+    param($x, $y, $w, $h, $text, $multi = $false)
+    $t = New-Object System.Windows.Forms.TextBox
+    $t.Location = New-Object System.Drawing.Point($x, $y); $t.Size = New-Object System.Drawing.Size($w, $h)
+    $t.Multiline = $multi; if ($multi) { $t.ScrollBars = 'Vertical' }
+    $t.Text = $text; $f.Controls.Add($t); return $t
+  }
+
+  New-Label 'PLAYERS (one per line, shown as "Played before? Tap your name")' 16 12 450 18 8 $true $muted $f | Out-Null
+  $players = & $tb 16 32 448 110 (($c.players) -join "`r`n") $true
+  New-Label 'SUBTITLE (under the name on the board)' 16 152 450 18 8 $true $muted $f | Out-Null
+  $sub = & $tb 16 172 448 26 ([string]$c.subtitle)
+
+  New-Label 'WI-FI QR ON THE BOARD' 16 210 450 18 8 $true $muted $f | Out-Null
+  New-Label 'Network' 16 234 80 22 10 $false $ink $f | Out-Null
+  $ssid = & $tb 100 232 250 26 ([string]$c.wifi.ssid)
+  $detect = New-Button 'Detect' 358 231 106 28 $panel $ink $f; $detect.Font = $form.Font
+  New-Label 'Password' 16 268 80 22 10 $false $ink $f | Out-Null
+  $pw = & $tb 100 266 250 26 ([string]$c.wifi.password)
+  $readKey = New-Button 'Read from Windows' 358 265 106 28 $panel $ink $f; $readKey.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+  $show = New-Object System.Windows.Forms.CheckBox
+  $show.Text = 'Show the network and password on the board'; $show.Checked = [bool]$c.wifi.showOnBoard
+  $show.Location = New-Object System.Drawing.Point(16, 298); $show.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($show)
+  $wifiNote = New-Label 'When ticked, every phone that opens the game is sent the password too (that is how the QR works).' 16 322 448 34 8 $false $muted $f
+
+  New-Label 'CARD READER' 16 362 450 18 8 $true $muted $f | Out-Null
+  $reader = New-Object System.Windows.Forms.CheckBox
+  $reader.Text = 'Use the card reader (camera button on phones; needs Ollama)'; $reader.Checked = ($c.cardReader.enabled -ne $false)
+  $reader.Location = New-Object System.Drawing.Point(16, 382); $reader.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($reader)
+
+  New-Label 'JOIN ADDRESS (the one in the QR code)' 16 414 450 18 8 $true $muted $f | Out-Null
+  $addr = New-Object System.Windows.Forms.ComboBox
+  $addr.DropDownStyle = 'DropDownList'; $addr.Location = New-Object System.Drawing.Point(16, 434); $addr.Size = New-Object System.Drawing.Size(448, 26)
+  [void]$addr.Items.Add('Automatic')
+  $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' })
+  foreach ($ip in $ips) { [void]$addr.Items.Add("$($ip.IPAddress)  ($($ip.InterfaceAlias))") }
+  $addr.SelectedIndex = 0
+  for ($i = 1; $i -lt $addr.Items.Count; $i++) { if ($addr.Items[$i] -like "$($c.network.address) *") { $addr.SelectedIndex = $i } }
+  $f.Controls.Add($addr)
+
+  New-Label 'PORTS' 16 472 80 18 8 $true $muted $f | Out-Null
+  New-Label 'Main' 16 494 40 22 10 $false $ink $f | Out-Null
+  $pMain = & $tb 60 492 80 26 ([string]$c.ports.main)
+  New-Label 'Also (0 = off)' 160 494 100 22 10 $false $ink $f | Out-Null
+  $pAlso = & $tb 262 492 80 26 ([string]$c.ports.also)
+  New-Label 'Join address, ports and the card reader connection apply on the next Start.' 16 524 448 20 8 $false $muted $f | Out-Null
+
+  $save = New-Button 'Save' 254 556 100 34 $green $navy $f
+  $cancel = New-Button 'Cancel' 364 556 100 34 $panel $ink $f
+  $cancel.Add_Click({ $f.Close() })
+  $detect.Add_Click({
+    $n = Get-WifiNow
+    if ($n) { $ssid.Text = $n } else { [System.Windows.Forms.MessageBox]::Show($f, "Couldn't find a Wi-Fi connection on this PC. Type the network name instead.", 'Flip7yoke') | Out-Null }
+  })
+  $readKey.Add_Click({
+    if (-not $ssid.Text) { $n = Get-WifiNow; if ($n) { $ssid.Text = $n } }
+    $k = if ($ssid.Text) { Get-WifiKey $ssid.Text } else { $null }
+    if ($k) { $pw.Text = $k } else { [System.Windows.Forms.MessageBox]::Show($f, "Windows didn't give the password for this network (it can refuse, or word it differently on non-English Windows). Type it in, or leave it blank.", 'Flip7yoke') | Out-Null }
+  })
+  $save.Add_Click({
+    # Same checks as the server, so mistakes never reach the file.
+    $problems = @()
+    $names = @(); $seen = @{}
+    foreach ($n in ($players.Text -split "`r?`n")) {
+      $n = $n.Trim(); if ($n.Length -gt 20) { $n = $n.Substring(0, 20) }
+      if (-not $n) { continue }
+      if ($seen.ContainsKey($n.ToLower())) { $problems += "'$n' is listed twice."; continue }
+      $seen[$n.ToLower()] = $true; $names += $n
+    }
+    $m = 0; $a = 0
+    if (-not [int]::TryParse($pMain.Text.Trim(), [ref]$m) -or $m -lt 1 -or $m -gt 65535) { $problems += 'Main port must be a whole number from 1 to 65535.' }
+    if (-not [int]::TryParse($pAlso.Text.Trim(), [ref]$a) -or $a -lt 0 -or $a -gt 65535) { $problems += 'Also port must be 0 (off) or a whole number from 1 to 65535.' }
+    if ($m -eq $a -and $a -ne 0) { $problems += 'The two ports must be different.' }
+    if ($ssid.Text.Length -gt 32) { $problems += 'The network name is longer than 32 characters.' }
+    if ($pw.Text.Length -gt 63) { $problems += 'The Wi-Fi password is longer than 63 characters.' }
+    if ($problems.Count) { [System.Windows.Forms.MessageBox]::Show($f, ($problems -join "`r`n"), 'Flip7yoke settings') | Out-Null; return }
+
+    $c.players = @($names)
+    $c.subtitle = $sub.Text.Trim()
+    $c.wifi.ssid = $ssid.Text; $c.wifi.password = $pw.Text; $c.wifi.showOnBoard = $show.Checked
+    $c.cardReader.enabled = if ($reader.Checked) { 'auto' } else { $false }
+    $c.network.address = if ($addr.SelectedIndex -le 0) { 'auto' } else { ($addr.SelectedItem -split '\s+')[0] }
+    $c.ports.main = $m; $c.ports.also = $a
+    try { Save-Config $c } catch { [System.Windows.Forms.MessageBox]::Show($f, "Couldn't save settings: $($_.Exception.Message)", 'Flip7yoke') | Out-Null; return }
+    $f.Close()
+  })
+  [void]$f.ShowDialog($form)
+  $subLbl.Text = [string](Get-Config).subtitle
+  Update-Status
 })
 
 $timer = New-Object System.Windows.Forms.Timer

@@ -12,7 +12,7 @@
 </head>
 <body>
 <header>
-  <h1><span class="wordmark">Flip<span class="seven">7</span>yoke</span><span class="night">Thursday game night</span></h1>
+  <h1><span class="wordmark">Flip<span class="seven">7</span>yoke</span><span class="night" id="subtitle" hidden></span></h1>
   <span class="mode" id="modeTag" hidden></span>
   <span class="dot" id="conn" title="Live connection"></span>
   <button id="shareBtn">Join</button>
@@ -65,7 +65,13 @@ function connect() {
   const es = new EventSource('/events');
   es.onopen = () => $('#conn').classList.add('on');
   es.onerror = () => $('#conn').classList.remove('on');
-  es.onmessage = ev => { S = JSON.parse(ev.data); render(); };
+  es.onmessage = ev => {
+    const was = S && S.reader;
+    S = JSON.parse(ev.data);
+    render();
+    // the camera button comes and goes with the card reader, even while someone has their hand open
+    if (was !== S.reader && editing && $('#entrySheet').classList.contains('open')) drawEntry();
+  };
 }
 
 function render() {
@@ -160,6 +166,7 @@ function renderBoard() {
   }
   const { tot, ranked, best, over, banner } = standings();
   let html = '<div>' + banner;
+  if (S.saveError) html += `<div class="saveError">Scores not saving on this computer: ${esc(S.saveError)}</div>`;
   if (S.finishing) html += `<div class="finishing">All scores in. Finishing round ${S.rounds.length + 1}…</div>`;
   html += ranked.map((p, i) => {
     const e = S.draft[p.id];
@@ -200,12 +207,14 @@ function renderBoard() {
 }
 
 // Join instructions stay on the board so people can scan whenever they sit down.
+// The server picks the address on the home network (joinUrl); urls is the fallback when it found none.
 let joinUrls = null, regulars = [], wifi = null;
 fetch('/api/info').then(r => r.json()).then(i => {
-  const lan = i.urls.filter(u => /\/\/(192\.168|10\.)/.test(u));
-  joinUrls = lan.length ? lan : i.urls;
+  joinUrls = i.joinUrl ? [i.joinUrl] : i.urls;
   regulars = i.names || [];
   wifi = i.wifi || null;
+  $('#subtitle').textContent = i.subtitle || '';
+  $('#subtitle').hidden = !i.subtitle;
   render();
 }).catch(() => {});
 function joinPanel() {
@@ -384,7 +393,7 @@ function drawEntry() {
     <div class="big ${score < 0 ? 'neg' : ''} ${E.bust ? 'busted' : ''}">${score}<small>${caption}${Rules.wipes(E) ? ' · total wiped to 0' : ''}</small></div>
     ${note ? `<div class="note">${esc(note)}</div>` : ''}
     <div class="hand">${chips || '<span class="muted">Tap each card as it\'s dealt to you</span>'}</div>
-    <label class="snap ${scanning ? 'busy' : ''}"><input type="file" accept="image/*" capture="environment" id="snap" hidden ${scanning ? 'disabled' : ''}>${scanning ? 'Reading your cards…' : '📷 Snap my cards'}</label>
+    ${S.reader === 'ready' || scanning ? `<label class="snap ${scanning ? 'busy' : ''}"><input type="file" accept="image/*" capture="environment" id="snap" hidden ${scanning ? 'disabled' : ''}>${scanning ? 'Reading your cards…' : '📷 Snap my cards'}</label>` : ''}
     <div class="label">Number cards</div>
     <div class="grid nums ${done ? 'dim' : ''}">${numBtns}</div>
     <div class="grid specials">${special}</div>
@@ -407,7 +416,7 @@ function drawEntry() {
   if (!S.draft[editing]) saveWip(editing, E);
 
   const b = $('#entryBody');
-  b.querySelector('#snap').onchange = ev => { const f = ev.target.files[0]; if (f) scanPhoto(f); };
+  if (b.querySelector('#snap')) b.querySelector('#snap').onchange = ev => { const f = ev.target.files[0]; if (f) scanPhoto(f); };
   b.querySelectorAll('[data-n]').forEach(el => el.onclick = () => change(() => deal(+el.dataset.n)));
   b.querySelectorAll('[data-rm]').forEach(el => el.onclick = () => change(() => {
     const [gone] = E.cards.splice(+el.dataset.rm, 1);
@@ -558,9 +567,8 @@ $('#commitBtn').onclick = () => {
   act('commitRound');
 };
 $('#shareBtn').onclick = async () => {
-  const { urls } = await (await fetch('/api/info')).json();
-  const lan = urls.filter(u => /\/\/(192\.168|10\.)/.test(u));
-  const list = lan.length ? lan : urls;
+  const i = await (await fetch('/api/info')).json();
+  const list = i.joinUrl ? [i.joinUrl] : i.urls;
   $('#urls').innerHTML = list.map(u => `<div class="url">${esc(u)}</div>`).join('');
   if (window.qrcode && list[0]) {
     const q = qrcode(0, 'M'); q.addData(list[0]); q.make();

@@ -267,3 +267,6 @@ tr.tot td { font-weight: 700; border-top: 2px solid var(--ink); }
   .player .total { font-size: 46px; }
 }
 @media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
+
+/* scores can't be saved on the computer (disk full, file locked...): shown on the board until a save works again */
+.saveError { background: var(--bad); color: #fff; border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; text-align: center; font-weight: 700; }

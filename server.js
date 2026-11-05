@@ -1,17 +1,17 @@
 // Flip 7 score keeper: zero-dependency Node server shared by every device on the Wi-Fi.
 // Loading this file does nothing by itself; start() runs a server. `node server.js` calls start() (see the end).
 const http = require('http');
-const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Rules = require('./public/rules.js');
 const { jsonFile } = require('./lib/store.js');
 const { createReader } = require('./lib/reader.js');
+const { openConfig, RESTART_KEYS, get } = require('./lib/config.js');
+const { pickAddress, addresses } = require('./lib/net.js');
+const paths = require('./lib/paths.js');
 
 const MODES = ['classic', 'vengeance', 'brutal'];
-// Names shown under "Played before? Tap your name". Tapping one joins the game as that player.
-const REGULARS = ['Ryan', 'Gareth', 'Rossi', 'Chris', 'Carlo', 'Jarvis', 'Rita'];
-const PUBLIC = path.join(__dirname, 'public');
+const TYPES = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', woff2: 'font/woff2' };
 
 const fresh = () => ({ mode: 'classic', zeroRule: 'total', target: 200, players: [], rounds: [], draft: {}, version: 0 });
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -29,49 +29,51 @@ function cleanEntry(e, players) {
   return out;
 }
 
-// Wi-Fi details from .env (kept out of git), shown on the board with a join-the-Wi-Fi QR code.
-function readEnv(file) {
-  try {
-    return Object.fromEntries(fs.readFileSync(file, 'utf8').split(/\r?\n/)
-      .filter(l => /^[A-Z_]+=/.test(l)).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
-  } catch { return {}; }
-}
-function wifiInfo(envFile) {
-  const env = readEnv(envFile);
-  if (!env.WIFI_SSID) return null;
+// Join-the-Wi-Fi details for the board, only when the host has ticked "show on board" and set a network.
+function wifiInfo(w) {
+  if (!w.showOnBoard || !w.ssid) return null;
   // Standard Wi-Fi QR format that iPhone and Android cameras offer to join; these characters need a backslash.
   const q = s => String(s).replace(/([\\;,:"])/g, '\\$1');
-  const auth = env.WIFI_PASSWORD ? (env.WIFI_AUTH || 'WPA') : 'nopass';
-  return {
-    ssid: env.WIFI_SSID, password: env.WIFI_PASSWORD || '',
-    qr: `WIFI:T:${auth};S:${q(env.WIFI_SSID)};${env.WIFI_PASSWORD ? `P:${q(env.WIFI_PASSWORD)};` : ''};`,
-  };
+  const auth = w.password ? w.auth : 'nopass';
+  return { ssid: w.ssid, password: w.password, qr: `WIFI:T:${auth};S:${q(w.ssid)};${w.password ? `P:${q(w.password)};` : ''};` };
 }
 
-function defaults() {
+// Only answer requests addressed to this PC (localhost, its own addresses or its name). This stops a web page
+// elsewhere reaching the game through DNS rebinding; the JSON-only rule on actions stops cross-site posts.
+function hostAllowed(hostHeader) {
+  if (!hostHeader) return false;
+  const host = hostHeader.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  const name = os.hostname().toLowerCase();
+  if (['localhost', '127.0.0.1', '::1', name, `${name}.local`].includes(host)) return true;
+  return addresses().some(a => a.address === host);
+}
+
+// Starts a score keeper. Resolves once it is listening, with { port, act, close, ... }.
+// Options override the environment, which overrides config.json (see lib/config.js).
+async function start(options = {}) {
   const env = process.env;
-  return {
-    port: env.PORT === undefined ? 7777 : Number(env.PORT),
-    alsoPort: env.ALSO_PORT === undefined ? 80 : Number(env.ALSO_PORT),
-    stateFile: env.STATE_FILE || path.join(__dirname, 'state.json'),
-    historyFile: env.HISTORY_FILE || path.join(__dirname, 'history.json'),
-    scansDir: env.SCANS_DIR || path.join(__dirname, 'scans'),
-    envFile: path.join(__dirname, '.env'),
-    ollamaUrl: env.OLLAMA_URL || 'http://127.0.0.1:11434',
-    ollamaModel: env.OLLAMA_MODEL || 'qwen3-vl:4b-instruct', // ~2s per photo on a GTX 1080
-    warmReader: true,
-    autoMs: Number(env.FLIP7_AUTO_MS) || 5000, // tests shorten the auto-finish pause
-    log: console.log,
-  };
-}
+  const log = options.log || console.log;
+  const dataDir = options.dataDir || paths.dataDir();
+  paths.checkDataDir(dataDir); // throws "Can't write to <folder>: <reason>"
 
-// Starts a score keeper. Resolves once it is listening, with { port, act, state, close }.
-function start(options = {}) {
-  const o = { ...defaults(), ...options };
-  const log = o.log;
+  const cfg = options.config === false ? null : openConfig(dataDir, { log, onChange: () => applyConfig() });
+  const C = () => (cfg ? cfg.config : require('./lib/config.js').DEFAULTS);
+  const startCfg = JSON.parse(JSON.stringify(C()));
+  const pick = (opt, envVal, conv, cfgVal) => (opt !== undefined ? opt : envVal !== undefined ? conv(envVal) : cfgVal);
+  const o = {
+    port: pick(options.port, env.PORT, Number, startCfg.ports.main),
+    alsoPort: pick(options.alsoPort, env.ALSO_PORT, Number, startCfg.ports.also),
+    stateFile: options.stateFile || env.STATE_FILE || path.join(dataDir, 'state.json'),
+    historyFile: options.historyFile || env.HISTORY_FILE || path.join(dataDir, 'history.json'),
+    scansDir: options.scansDir || env.SCANS_DIR || path.join(dataDir, 'scans'),
+    ollamaUrl: pick(options.ollamaUrl, env.OLLAMA_URL, String, startCfg.cardReader.url),
+    ollamaModel: pick(options.ollamaModel, env.OLLAMA_MODEL, String, startCfg.cardReader.model),
+    reader: options.reader !== undefined ? options.reader : !env.FLIP7_NO_READER, // false: never contact Ollama
+    autoMs: options.autoMs || Number(env.FLIP7_AUTO_MS) || 5000, // tests shorten the auto-finish pause
+  };
+
   const saveErrors = {};
   const onSaveError = name => msg => { saveErrors[name] = msg; broadcast(); };
-
   const stateStore = jsonFile(o.stateFile, { log, onError: onSaveError('state') });
   const historyStore = jsonFile(o.historyFile, { log, onError: onSaveError('history') });
 
@@ -81,12 +83,14 @@ function start(options = {}) {
   let history = historyStore.load();
   if (!Array.isArray(history)) history = [];
 
-  const reader = createReader({ url: o.ollamaUrl, model: o.ollamaModel, scansDir: o.scansDir, log });
+  const reader = createReader({ url: o.ollamaUrl, model: o.ollamaModel, scansDir: o.scansDir, log, onChange: () => broadcast() });
   const clients = new Set();
-
   const saveError = () => saveErrors.state || saveErrors.history || null;
+  // What every page needs besides the game itself, sent with each update.
+  const extras = () => ({ saveError: saveError(), reader: reader.state });
+
   function broadcast() {
-    const msg = `data: ${JSON.stringify({ ...state, saveError: saveError() })}\n\n`;
+    const msg = `data: ${JSON.stringify({ ...state, ...extras() })}\n\n`;
     for (const res of clients) res.write(msg);
   }
   function save() {
@@ -94,6 +98,13 @@ function start(options = {}) {
     stateStore.save(state);
     broadcast();
   }
+
+  // Live settings: players, subtitle, Wi-Fi and the card reader on/off. The rest waits for the next Start.
+  function applyConfig() {
+    reader.setEnabled(o.reader && C().cardReader.enabled !== false);
+    broadcast();
+  }
+  const restartNeeded = () => RESTART_KEYS.filter(k => JSON.stringify(get(C(), k)) !== JSON.stringify(get(startCfg, k)));
 
   // Save the current game to history (called before New game clears it). Games with no rounds are skipped.
   function archiveGame() {
@@ -215,72 +226,86 @@ function start(options = {}) {
     return out;
   }
 
-  function lanUrls(port) {
-    return Object.values(os.networkInterfaces()).flat()
-      .filter(i => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254'))
-      .map(i => `http://${i.address}:${port}`);
+  // Exact allow-list of the page's files (no path joining from the URL). Packaged, the list is built into the exe.
+  const STATIC = {};
+  for (const f of paths.publicFiles()) {
+    const type = TYPES[f.split('.').pop()];
+    if (type && f !== 'index.html') STATIC['/' + f] = [f, type];
   }
-
-  // Scripts the page loads, all served from this machine so game night needs no internet.
-  // Exact allow-list (no path joining from the URL), plus the bundled fonts.
-  const STATIC = {
-    '/rules.js': ['rules.js', 'text/javascript; charset=utf-8'],
-    '/qrcode.min.js': ['qrcode.min.js', 'text/javascript; charset=utf-8'],
-    '/style.css': ['style.css', 'text/css; charset=utf-8'],
-  };
-  try {
-    for (const f of fs.readdirSync(path.join(PUBLIC, 'fonts'))) {
-      if (f.endsWith('.woff2')) STATIC[`/fonts/${f}`] = [`fonts/${f}`, 'font/woff2'];
-    }
-  } catch {}
 
   const json = (res, code, body, extra = {}) =>
     res.writeHead(code, { 'Content-Type': 'application/json', ...extra }).end(JSON.stringify(body));
   let port = o.port;
+  let join = { address: null, all: [] };
+  const urlFor = a => `http://${a}${port === 80 ? '' : ':' + port}`;
+  const lanUrls = () => {
+    const rest = addresses().map(a => urlFor(a.address)).filter(u => u !== joinUrl());
+    return joinUrl() ? [joinUrl(), ...rest] : rest;
+  };
+  const joinUrl = () => (join.address ? urlFor(join.address) : null);
+  const readBody = (req, max, cb) => {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > max) req.destroy(); });
+    req.on('end', () => cb(body));
+  };
 
   function handle(req, res) {
-    if (req.url === '/events') {
+    if (!hostAllowed(req.headers.host)) {
+      return res.writeHead(403, { 'Content-Type': 'text/plain' }).end("Open the game using this computer's address, as shown on the board.");
+    }
+    const url = req.url.split('?')[0];
+    if (url === '/events') {
       // Which browser each device uses, for diagnosing a phone that can't show the page.
       log(`${new Date().toLocaleTimeString()} device connected: ${req.socket.remoteAddress} ${req.headers['user-agent'] || '?'}`);
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ ...state, saveError: saveError() })}\n\n`);
+      res.write(`data: ${JSON.stringify({ ...state, ...extras() })}\n\n`);
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); });
       return;
     }
-    if (req.url === '/api/scan' && req.method === 'POST') {
+    if (url === '/api/scan' && req.method === 'POST') {
       if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return res.writeHead(415).end();
-      let body = '';
-      req.on('data', c => { body += c; if (body.length > 4e6) req.destroy(); });
-      req.on('end', async () => {
+      return readBody(req, 4e6, async body => {
         try {
+          if (reader.state === 'off') throw Object.assign(new Error('The card reader is turned off.'), { off: true });
           const { image } = JSON.parse(body);
           if (typeof image !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(image)) throw new Error('no photo');
           // tools/eval-scans.js marks its requests so test runs don't push real photos out of scans/
           json(res, 200, await reader.scan(image, state.mode, !req.headers['x-flip7-test']));
         } catch (e) {
-          const down = /ECONNREFUSED|ENOTFOUND/.test(e.code || e.message);
-          json(res, down ? 503 : 500, { error: down ? "The card reader isn't running on the computer." : String(e.message).slice(0, 200) });
+          const down = /ECONNREFUSED|ENOTFOUND|ECONNRESET/.test(e.code || e.message);
+          if (down) reader.check(); // hides the camera on every phone if Ollama has gone
+          json(res, down || e.off ? 503 : 500, { error: down ? "The card reader isn't running on the computer." : String(e.message).slice(0, 200) });
         }
       });
-      return;
     }
-    if (req.url === '/api/history') return json(res, 200, history, { 'Cache-Control': 'no-cache' });
-    if (req.url === '/api/status') {
+    if (url === '/api/reader/check' && req.method === 'POST') {
+      if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return res.writeHead(415).end();
+      return readBody(req, 1e3, () => reader.check().then(s => json(res, 200, { reader: s })));
+    }
+    if (url === '/api/history') return json(res, 200, history, { 'Cache-Control': 'no-cache' });
+    if (url === '/api/status') {
       return json(res, 200, {
         devices: clients.size, uptime: Math.round(process.uptime()), mode: state.mode,
         players: state.players.map(p => p.name), round: state.rounds.length + 1,
-        scored: Object.keys(state.draft).length, urls: lanUrls(port), saveError: saveError(),
-      });
+        scored: Object.keys(state.draft).length, urls: lanUrls(), joinUrl: joinUrl(), port,
+        saveError: saveError(), reader: reader.state, dataDir,
+        configError: cfg ? cfg.error : null, restartNeeded: restartNeeded(),
+        token: options.token || env.FLIP7_TOKEN || null,
+      }, { 'Cache-Control': 'no-cache' });
     }
-    if (req.url === '/api/info') return json(res, 200, { urls: lanUrls(port), names: REGULARS, wifi: wifiInfo(o.envFile) });
-    if (req.url === '/api/action' && req.method === 'POST') {
+    if (url === '/api/info') {
+      return json(res, 200, {
+        urls: lanUrls(), joinUrl: joinUrl(),
+        addresses: join.all.map(a => ({ ...a, url: urlFor(a.address) })),
+        names: C().players, subtitle: C().subtitle, wifi: wifiInfo(C().wifi), reader: reader.state,
+      }, { 'Cache-Control': 'no-cache' });
+    }
+    if (url === '/api/action' && req.method === 'POST') {
       // A JSON content type forces a CORS preflight, which this server never approves, so other sites can't post here.
       if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return res.writeHead(415).end();
-      let body = '';
-      req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
-      req.on('end', () => {
+      return readBody(req, 1e5, body => {
         try {
           const { type, ...args } = JSON.parse(body);
           const out = act(type, args);
@@ -289,19 +314,16 @@ function start(options = {}) {
           res.writeHead(e.message === 'stopping' ? 503 : 400).end(String(e.message));
         }
       });
-      return;
     }
-    if (STATIC[req.url]) {
-      const [file, type] = STATIC[req.url];
-      return fs.readFile(path.join(PUBLIC, file), (err, body) => {
-        res.writeHead(err ? 404 : 200, { 'Content-Type': type, 'Cache-Control': type.startsWith('font/') ? 'max-age=604800' : 'no-cache' });
-        res.end(err ? '' : body);
-      });
+    if (STATIC[url]) {
+      const [file, type] = STATIC[url];
+      const body = paths.readPublic(file);
+      res.writeHead(body ? 200 : 404, { 'Content-Type': type, 'Cache-Control': type.startsWith('font/') ? 'max-age=604800' : 'no-cache' });
+      return res.end(body || '');
     }
-    fs.readFile(path.join(PUBLIC, 'index.html'), (err, html) => {
-      res.writeHead(err ? 500 : 200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(err ? 'index.html missing' : html);
-    });
+    const html = paths.readPublic('index.html');
+    res.writeHead(html ? 200 : 500, { 'Content-Type': TYPES.html, 'Cache-Control': 'no-cache' });
+    res.end(html || 'index.html missing');
   }
 
   const servers = [];
@@ -315,35 +337,41 @@ function start(options = {}) {
     s.listen(p, '0.0.0.0', () => { servers.push(s); resolve(s); });
   });
 
-  return (async () => {
-    const main = await listen(o.port, true);
-    port = main.address().port;
-    log('Flip 7 score keeper running. Open on any device on the Wi-Fi:');
-    for (const u of lanUrls(port)) log('  ' + u);
-    // Also answer on the standard web port, so a phone that blocks unusual ports can use http://<ip> with no number.
-    if (o.alsoPort && o.alsoPort !== port && await listen(o.alsoPort, false)) {
-      log(`Also answering on port ${o.alsoPort} (no :${port} needed)`);
-    }
-    if (o.warmReader) reader.warm();
+  let main;
+  try { main = await listen(o.port, true); } catch (e) {
+    if (cfg) cfg.close();
+    throw e;
+  }
+  port = main.address().port;
+  join = await pickAddress(startCfg.network.address, log);
+  log(`Flip 7 score keeper running (data in ${dataDir}). Phones join at:`);
+  log('  ' + (joinUrl() || `no network address found; this PC only: http://localhost:${port}`));
+  for (const u of lanUrls().slice(1)) log('  also ' + u);
+  if (cfg && cfg.error) log(`Settings: ${cfg.error}`);
+  // Also answer on the standard web port, so a phone that blocks unusual ports can use http://<ip> with no number.
+  if (o.alsoPort && o.alsoPort !== port && await listen(o.alsoPort, false)) {
+    log(`Also answering on port ${o.alsoPort} (no :${port} needed)`);
+  }
+  applyConfig(); // starts the card reader check unless it's off
 
-    // Stop taking actions, finish pending saves, close the listeners. Resolves to { saved, error }.
-    async function close() {
-      accepting = false;
-      clearTimeout(autoTimer);
-      reader.stop();
-      for (const res of clients) res.end();
-      clients.clear();
-      let error = null;
-      try { await stateStore.flush(); } catch (e) { error = e.message; }
-      try { await historyStore.flush(); } catch (e) { error = error || e.message; }
-      await Promise.all(servers.map(s => new Promise(r => { s.close(() => r()); s.closeAllConnections(); })));
-      return { saved: !error, error };
-    }
-    return { port, act, close, get state() { return state; }, get history() { return history; }, saveError };
-  })();
+  // Stop taking actions, finish pending saves, close the listeners. Resolves to { saved, error }.
+  async function close() {
+    accepting = false;
+    clearTimeout(autoTimer);
+    reader.stop();
+    if (cfg) cfg.close();
+    for (const res of clients) res.end();
+    clients.clear();
+    let error = null;
+    try { await stateStore.flush(); } catch (e) { error = e.message; }
+    try { await historyStore.flush(); } catch (e) { error = error || e.message; }
+    await Promise.all(servers.map(s => new Promise(r => { s.close(() => r()); s.closeAllConnections(); })));
+    return { saved: !error, error };
+  }
+  return { port, act, close, reader, get state() { return state; }, get history() { return history; }, saveError };
 }
 
-module.exports = { start, cleanEntry };
+module.exports = { start, cleanEntry, hostAllowed, wifiInfo };
 
 if (require.main === module) {
   start().catch(e => {

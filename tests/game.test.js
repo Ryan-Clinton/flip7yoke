@@ -1,9 +1,8 @@
-// Gameplay tests: scoring rules, and the server's actions over HTTP. No dependencies: `node --test tests/`.
+// Gameplay tests: scoring rules, and the server's actions over HTTP. No dependencies: `node --test tests/game.test.js`.
 // Set FLIP7_TEST_EXE to a packaged Flip7yoke-server.exe to run the server tests against it instead of server.js.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -67,17 +66,14 @@ const freePort = () => new Promise(r => { const s = net.createServer().listen(0,
 // Starts a server on a free port with its data in `dir`. In-process by default, or the packaged exe.
 async function startGame(dir) {
   const port = await freePort();
-  const files = { stateFile: path.join(dir, 'state.json'), historyFile: path.join(dir, 'history.json'), scansDir: path.join(dir, 'scans') };
   if (!EXE) {
     const { start } = require('../server.js');
-    const g = await start({ ...files, port, alsoPort: 0, warmReader: false, autoMs: 100, log: () => {}, envFile: path.join(dir, '.env') });
+    const g = await start({ dataDir: dir, port, alsoPort: 0, reader: false, autoMs: 100, log: () => {} });
     return { url: `http://127.0.0.1:${port}`, stop: () => g.close() };
   }
-  const child = spawn(EXE, ['--serve'], {
-    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-    env: { ...process.env, PORT: String(port), ALSO_PORT: '0', FLIP7_DATA: dir, FLIP7_AUTO_MS: '100', FLIP7_NO_READER: '1',
-      STATE_FILE: files.stateFile, HISTORY_FILE: files.historyFile, SCANS_DIR: files.scansDir },
-  });
+  const env = { ...process.env, PORT: String(port), ALSO_PORT: '0', FLIP7_DATA: dir, FLIP7_AUTO_MS: '100', FLIP7_NO_READER: '1' };
+  for (const k of ['STATE_FILE', 'HISTORY_FILE', 'SCANS_DIR', 'OLLAMA_URL', 'OLLAMA_MODEL']) delete env[k];
+  const child = spawn(EXE, ['--serve'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env });
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(url + '/api/status')).ok) break; } catch {}
@@ -232,4 +228,116 @@ test('store: a write that fails is reported, keeps the old file, and clears on t
   assert.strictEqual(st.error, null);
   assert.deepStrictEqual(errors.map(Boolean), [true, false]);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(file + '.bak', 'utf8')), { v: 1 });
+});
+
+// ---------- settings, network, card reader ----------
+
+test('config: bad values fall back to defaults with a note; duplicates and port clashes handled', () => {
+  const { validate, DEFAULTS } = require('../lib/config.js');
+  const { config, notes } = validate({
+    players: ['Ryan', ' ryan ', '', 'Gareth', 42], subtitle: '  Thursday  ',
+    wifi: { ssid: 'Home', password: 'pw', auth: 'WPA3', showOnBoard: 'yes' },
+    cardReader: { enabled: 'maybe', url: 'ftp://x' }, network: { address: '300.1.1.1' },
+    ports: { main: 8080, also: 8080 },
+  });
+  assert.deepStrictEqual(config.players, ['Ryan', 'Gareth']);
+  assert.strictEqual(config.subtitle, 'Thursday');
+  assert.strictEqual(config.wifi.auth, 'WPA');
+  assert.strictEqual(config.wifi.showOnBoard, true);
+  assert.strictEqual(config.cardReader.enabled, 'auto');
+  assert.strictEqual(config.cardReader.url, DEFAULTS.cardReader.url);
+  assert.strictEqual(config.network.address, 'auto');
+  assert.deepStrictEqual(config.ports, { main: 8080, also: 0 });
+  assert.ok(notes.length >= 6);
+  assert.deepStrictEqual(validate({}).config, DEFAULTS); // an empty file is all defaults
+});
+
+test('config: broken JSON keeps the last good settings; .env moves into config.json once', async () => {
+  const { openConfig } = require('../lib/config.js');
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, '.env'), 'WIFI_SSID=Home\nWIFI_PASSWORD=secret\n');
+  const c = openConfig(dir, { log: () => {}, watch: false });
+  assert.strictEqual(c.config.wifi.ssid, 'Home');
+  assert.ok(fs.existsSync(path.join(dir, '.env.migrated')) && !fs.existsSync(path.join(dir, '.env')));
+  fs.writeFileSync(c.file, JSON.stringify({ players: ['Rita'] }));
+  assert.deepStrictEqual(c.reload().players, ['Rita']);
+  fs.writeFileSync(c.file, '{ "players": [ "Rita", }');
+  c.reload();
+  assert.match(c.error, /config\.json has an error/);
+  assert.deepStrictEqual(c.config.players, ['Rita']);
+});
+
+test('server: names, subtitle and Wi-Fi come from config.json and change live; Wi-Fi only when shown on board', async () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Carlo'], subtitle: 'Friday', wifi: { ssid: 'Home', password: 'pw', showOnBoard: false } }));
+  const g = await startGame(dir);
+  try {
+    let i = await (await fetch(g.url + '/api/info')).json();
+    assert.deepStrictEqual(i.names, ['Carlo']);
+    assert.strictEqual(i.subtitle, 'Friday');
+    assert.strictEqual(i.wifi, null);
+    assert.strictEqual(i.reader, 'off');
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Carlo', 'Jarvis'], wifi: { ssid: 'Home', password: 'p;w' } }));
+    for (let n = 0; n < 40 && i.names.length < 2; n++) { await wait(100); i = await (await fetch(g.url + '/api/info')).json(); }
+    assert.deepStrictEqual(i.names, ['Carlo', 'Jarvis']);
+    assert.strictEqual(i.wifi.qr, String.raw`WIFI:T:WPA;S:Home;P:p\;w;;`);
+  } finally { await g.stop(); }
+});
+
+test('server: requests addressed to another host name are refused (DNS rebinding)', async () => {
+  const dir = tmpDir();
+  const g = await startGame(dir);
+  try {
+    const port = new URL(g.url).port;
+    const res = await new Promise(resolve => require('http').get({ host: '127.0.0.1', port, path: '/api/status', headers: { Host: `evil.example:${port}` } }, resolve));
+    assert.strictEqual(res.statusCode, 403);
+    assert.strictEqual((await fetch(`http://localhost:${port}/api/status`)).status, 200);
+    const { hostAllowed } = require('../server.js');
+    assert.ok(hostAllowed('[::1]:7777') && !hostAllowed('') && !hostAllowed(undefined));
+  } finally { await g.stop(); }
+});
+
+test('net: private ranges include 172.16/12; virtual adapters lose', () => {
+  const { isPrivate, VIRTUAL } = require('../lib/net.js');
+  assert.ok(['10.0.0.5', '172.16.0.1', '172.31.255.1', '192.168.1.141'].every(isPrivate));
+  assert.ok(!['172.32.0.1', '8.8.8.8', '100.64.0.1'].some(isPrivate));
+  assert.ok(VIRTUAL.test('vEthernet (WSL)') && VIRTUAL.test('Tailscale') && !VIRTUAL.test('Wi-Fi') && !VIRTUAL.test('Ethernet 2'));
+});
+
+test('reader: no-model, then ready, then no-ollama when it stops, then ready when it returns', { skip: !!EXE }, async () => {
+  const { createReader } = require('../lib/reader.js');
+  const http = require('http');
+  let models = [];
+  const handler = (req, res) => {
+    if (req.url === '/api/version') return res.end('{"version":"x"}');
+    if (req.url === '/api/tags') return res.end(JSON.stringify({ models }));
+    req.resume(); req.on('end', () => res.end('{}'));
+  };
+  let fake = http.createServer(handler);
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  const port = fake.address().port;
+  const seen = [];
+  const rd = createReader({ url: `http://127.0.0.1:${port}`, model: 'm:1', scansDir: tmpDir(), log: () => {}, healthMs: 100, onChange: s => seen.push(s) });
+  try {
+    assert.strictEqual(rd.state, 'off');
+    rd.setEnabled(true);
+    assert.strictEqual(await rd.check(), 'no-model');
+    models = [{ name: 'm:1', model: 'm:1' }];
+    assert.strictEqual(await rd.check(), 'ready');
+    fake.closeAllConnections(); await new Promise(r => fake.close(r));
+    for (let n = 0; n < 30 && rd.state !== 'no-ollama'; n++) await wait(50);
+    assert.strictEqual(rd.state, 'no-ollama'); // noticed by the health check, without a photo
+    fake = http.createServer(handler);
+    await new Promise(r => fake.listen(port, '127.0.0.1', r));
+    for (let n = 0; n < 30 && rd.state !== 'ready'; n++) await wait(50);
+    assert.strictEqual(rd.state, 'ready');
+    rd.setEnabled(false);
+    assert.strictEqual(rd.state, 'off');
+    // the camera never shows before the model is confirmed: checking -> no-model -> (checking) -> ready
+    assert.deepStrictEqual(seen.slice(0, 2), ['checking', 'no-model']);
+    assert.ok(seen.indexOf('ready') > 1 && !seen.slice(0, seen.indexOf('ready')).includes('ready'));
+  } finally {
+    rd.stop();
+    fake.closeAllConnections(); fake.close();
+  }
 });

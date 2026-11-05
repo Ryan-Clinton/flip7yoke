@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 
 const SERVER = path.join(__dirname, 'server.js');
-const WATCH = [SERVER, path.join(__dirname, 'public', 'rules.js'), path.join(__dirname, '.env')];
+// config.json isn't here: the server applies settings itself (live ones at once, the rest on the next Start).
+const WATCH = [SERVER, path.join(__dirname, 'public', 'rules.js'),
+  ...fs.readdirSync(path.join(__dirname, 'lib')).filter(f => f.endsWith('.js')).map(f => path.join(__dirname, 'lib', f))];
 let child = null;
 let restarting = false;
 
