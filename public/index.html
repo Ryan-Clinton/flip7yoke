@@ -48,6 +48,8 @@ const mode = () => S.mode || 'classic';
 const veng = () => Rules.isVengeance(mode());
 const entryScore = e => Rules.entryScore(e, mode());
 const nameOf = id => (S.players.find(p => p.id === id) || {}).name || '?';
+// The Zero house rule (default): wipes the whole game total. Rulebook: only that round scores 0.
+const zeroWipes = () => (S.zeroRule || 'total') === 'total';
 // Each player gets a colour from the deck's numerals, in the order they joined.
 const DECK_COLOURS = ['#D9443A', '#2F8ED1', '#2BB0AC', '#8CC43F', '#E9B43C', '#B05FB0', '#8C6E5A'];
 const pcOf = id => DECK_COLOURS[Math.max(0, S.players.findIndex(p => p.id === id)) % DECK_COLOURS.length];
@@ -278,7 +280,7 @@ function deal(n, lucky) {
   if (ok) {
     E.cards.push(n);
     if (lucky) E.lucky = true;
-    if (V && n === 0) E.wipe = true; // The Zero: total wiped unless you Flip 7
+    if (V && n === 0 && zeroWipes()) E.wipe = true; // house rule: The Zero wipes the total unless you Flip 7
     if (Rules.isFlip7(E)) note = 'FLIP 7! The round is over.';
   } else if (!V && E.chance) {
     E.chance = false;
@@ -317,7 +319,7 @@ async function scanPhoto(file) {
         const ok = have === 0 || (V && n === 13 && have === 1 && E.lucky);
         if (ok) E.cards.push(n); else { E.bust = true; E.dup = n; }
       }
-      if (V && E.cards.includes(0)) E.wipe = true;
+      if (V && E.cards.includes(0) && zeroWipes()) E.wipe = true;
       const seen = E.cards.length + E.mods.length + ['x2', 'half', 'chance'].filter(k => E[k]).length;
       note = !seen ? "Couldn't make out any cards. Try again closer, flat and in good light."
         : hand.deckHint === 'vengeance' ? 'These look like Vengeance cards but the game is on Classic rules. Switch rules in the ⋯ menu on the board, then snap again.'
@@ -459,6 +461,13 @@ function renderMenu() {
       vengeance: 'With a Vengeance: cards 0-13, Lucky 13, The Zero, −2 to −10 and ÷2. Round scores never drop below 0.',
       brutal: 'Vengeance plus Brutal Mode: round scores can go negative, modifiers hit busted players, and a Flip 7 can take −15 off someone else.',
     }[mode()]}</p>
+    ${veng() ? `<div class="label">The Zero wipes</div>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <button data-zero="total" class="${zeroWipes() ? 'on' : ''}">The whole total</button>
+      <button data-zero="round" class="${zeroWipes() ? '' : 'on'}">This round only</button></div>
+    <p class="muted" style="margin:6px 0 0">${zeroWipes()
+      ? 'House rule: get The Zero without a Flip 7 and your game total goes back to 0.'
+      : 'Rulebook: The Zero makes that round score 0. Your game total is safe.'}</p>` : ''}
     <div class="label">Players</div>
     <div class="plist" style="margin-top:8px">${S.players.map(p => `<div class="row"><span style="flex:1">${esc(p.name)}</span><button class="ghost" data-rm="${p.id}">Remove</button></div>`).join('')}</div>
     <form id="menuAdd" class="row"><input placeholder="Add player" autocomplete="off"><button class="primary">Add</button></form>
@@ -478,6 +487,7 @@ function renderMenu() {
     if (Object.keys(S.draft).length && !confirm('Switching rules clears the scores entered for this round. Continue?')) return;
     act('setMode', { mode: el.dataset.mode });
   });
+  $('#menuBody').querySelectorAll('[data-zero]').forEach(el => el.onclick = () => act('setZeroRule', { rule: el.dataset.zero }));
   $('#setTarget').onclick = () => act('setTarget', { target: +$('#target').value });
   $('#newGame').onclick = () => { if (confirm('Start a new game? All scores are cleared.')) { act('newGame'); closeSheets(); } };
   bindClose();

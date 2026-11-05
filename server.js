@@ -8,7 +8,7 @@ const PORT = Number(process.env.PORT) || 7777;
 const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, 'state.json');
 const INDEX = path.join(__dirname, 'public', 'index.html');
 
-const fresh = () => ({ mode: 'classic', target: 200, players: [], rounds: [], draft: {}, version: 0 });
+const fresh = () => ({ mode: 'classic', zeroRule: 'total', target: 200, players: [], rounds: [], draft: {}, version: 0 });
 let state = fresh();
 try { state = { ...fresh(), ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch {}
 state.finishing = false; // the auto-finish timer doesn't survive a restart
@@ -122,6 +122,10 @@ const actions = {
   },
   setMode({ mode }) {
     if (MODES.includes(mode) && mode !== state.mode) { state.mode = mode; state.draft = {}; }
+  },
+  // The Zero: 'total' wipes the player's game total (house rule), 'round' just scores the round 0 (rulebook).
+  setZeroRule({ rule }) {
+    if (rule === 'total' || rule === 'round') state.zeroRule = rule;
   },
   deleteRound({ round }) { state.rounds.splice(round, 1); },
   setTarget({ target }) { if (Number.isFinite(target) && target > 0) state.target = Math.trunc(target); },
