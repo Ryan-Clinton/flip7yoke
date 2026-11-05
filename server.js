@@ -30,6 +30,25 @@ const MODES = ['classic', 'vengeance', 'brutal'];
 // Names shown under "Played before? Tap your name". Tapping one joins the game as that player.
 const REGULARS = ['Ryan', 'Gareth', 'Rossi', 'Chris', 'Carlo', 'Jarvis', 'Rita'];
 
+// Wi-Fi details from .env (kept out of git), shown on the board with a join-the-Wi-Fi QR code.
+function readEnv() {
+  try {
+    return Object.fromEntries(fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)
+      .filter(l => /^[A-Z_]+=/.test(l)).map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  } catch { return {}; }
+}
+function wifiInfo() {
+  const env = readEnv();
+  if (!env.WIFI_SSID) return null;
+  // Standard Wi-Fi QR format that iPhone and Android cameras offer to join; these characters need a backslash.
+  const q = s => String(s).replace(/([\\;,:"])/g, '\\$1');
+  const auth = env.WIFI_PASSWORD ? (env.WIFI_AUTH || 'WPA') : 'nopass';
+  return {
+    ssid: env.WIFI_SSID, password: env.WIFI_PASSWORD || '',
+    qr: `WIFI:T:${auth};S:${q(env.WIFI_SSID)};${env.WIFI_PASSWORD ? `P:${q(env.WIFI_PASSWORD)};` : ''};`,
+  };
+}
+
 // Rebuild an entry from known fields only, so stored state is always plain numbers and booleans.
 function cleanEntry(e) {
   e = e && typeof e === 'object' ? e : {};
@@ -153,11 +172,11 @@ const SCAN_SCHEMA = {
   required: ['numbers', 'modifiers'],
 };
 
-function ollamaChat(body) {
+function ollamaChat(body, apiPath = '/api/chat') {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = http.request({
-      hostname: OLLAMA.hostname, port: OLLAMA.port || 80, path: '/api/chat', method: 'POST',
+      hostname: OLLAMA.hostname, port: OLLAMA.port || 80, path: apiPath, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
       timeout: 90000,
     }, res => {
@@ -181,7 +200,7 @@ async function scanCards(imageB64) {
     model: OLLAMA_MODEL,
     stream: false,
     think: false, // answer straight away; reasoning first is slow on a GTX 1080 and made results wobble
-    keep_alive: '2h', // stay loaded on the GPU between rounds so later scans are quick
+    keep_alive: -1, // stay loaded on the GPU all night; Stop in the Flip 7 window frees it
     format: SCAN_SCHEMA,
     options: { temperature: 0 },
     messages: [{
@@ -191,7 +210,8 @@ async function scanCards(imageB64) {
 ${CARD_GUIDE}
 List every card you can see. Ignore action cards, card backs and anything that is not a card.
 Each card goes in exactly one list: a card printed with a sign (+, -, x, ÷) is a modifier, never a number card.
-Read the big number in the middle or corner of each card. Do not guess cards you cannot see.`,
+Read the big number in the middle or corner of each card. Do not guess cards you cannot see.
+Reply with compact JSON on a single line, no spaces or line breaks.`, // halves the answer time
     }],
   });
   const got = JSON.parse(reply.message.content);
@@ -226,6 +246,15 @@ function lanUrls() {
     .map(i => `http://${i.address}:${PORT}`);
 }
 
+// Load the model onto the GPU as soon as we start, so the first photo of the night doesn't wait ~4s for it.
+// Ollama may come up after us, so keep trying until it answers.
+function warmReader() {
+  ollamaChat({ model: OLLAMA_MODEL, keep_alive: -1 }, '/api/generate')
+    .then(() => console.log('Card reader ready (model loaded on the GPU).'))
+    .catch(() => setTimeout(warmReader, 15000));
+}
+warmReader();
+
 http.createServer((req, res) => {
   if (req.url === '/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -253,9 +282,17 @@ http.createServer((req, res) => {
     });
     return;
   }
+  if (req.url === '/api/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      devices: clients.size, uptime: Math.round(process.uptime()), mode: state.mode,
+      players: state.players.map(p => p.name), round: state.rounds.length + 1,
+      scored: Object.keys(state.draft).length, urls: lanUrls(),
+    }));
+  }
   if (req.url === '/api/info') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ urls: lanUrls(), names: REGULARS }));
+    return res.end(JSON.stringify({ urls: lanUrls(), names: REGULARS, wifi: wifiInfo() }));
   }
   if (req.url === '/api/action' && req.method === 'POST') {
     // A JSON content type forces a CORS preflight, which this server never approves, so other sites can't post here.

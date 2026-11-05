@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SERVER = path.join(__dirname, 'server.js');
-const WATCH = [SERVER, path.join(__dirname, 'public', 'rules.js')];
+const WATCH = [SERVER, path.join(__dirname, 'public', 'rules.js'), path.join(__dirname, '.env')];
 let child = null;
 let restarting = false;
 

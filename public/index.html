@@ -109,8 +109,12 @@
   body.board .bar { height: 10px; }
   body.board .footer button { max-width: 900px; }
   .joinPanel { position: sticky; top: 76px; text-align: center; }
-  .joinPanel #boardQr { background: #fff; padding: 12px; border-radius: 12px; width: fit-content; margin: 10px auto; }
-  .joinPanel #boardQr img { display: block; width: 240px; height: 240px; image-rendering: pixelated; }
+  .joinPanel .qrbox { background: #fff; padding: 10px; border-radius: 12px; width: fit-content; margin: 8px auto; }
+  .joinPanel .qrbox img { display: block; width: 190px; height: 190px; image-rendering: pixelated; }
+  .joinPanel .step { margin-top: 14px; font-weight: 700; font-size: 17px; text-align: left; }
+  .joinPanel .num { display: inline-block; width: 26px; height: 26px; line-height: 26px; border-radius: 50%; background: var(--accent); color: #1a1a1a; text-align: center; margin-right: 6px; }
+  .joinPanel .wifiText { font-size: 16px; line-height: 1.5; }
+  .joinPanel .wifiText b { color: var(--accent); font-size: 18px; }
   .finishing { background: var(--good); color: #1a1a1a; border-radius: 16px; padding: 14px; margin-bottom: 12px; text-align: center; font-weight: 700; font-size: 20px; }
   @media (max-width: 800px) { body.board main { grid-template-columns: 1fr; } .joinPanel { position: static; } }
 </style>
@@ -296,23 +300,31 @@ function renderBoard() {
 }
 
 // Join instructions stay on the board so people can scan whenever they sit down.
-let joinUrls = null, regulars = [];
+let joinUrls = null, regulars = [], wifi = null;
 fetch('/api/info').then(r => r.json()).then(i => {
   const lan = i.urls.filter(u => /\/\/(192\.168|10\.)/.test(u));
   joinUrls = lan.length ? lan : i.urls;
   regulars = i.names || [];
+  wifi = i.wifi || null;
   render();
 }).catch(() => {});
 function joinPanel() {
-  return `<div class="card joinPanel"><h3 style="margin:0">Join on your phone</h3>
-    <p class="muted" style="margin:4px 0 0">Same Wi-Fi, then scan or type:</p>
-    <div id="boardQr"></div>${(joinUrls || []).map(u => `<div class="url">${esc(u)}</div>`).join('')}</div>`;
+  const wifiStep = wifi ? `<div class="step"><span class="num">1</span> Join the Wi-Fi</div>
+    <div id="wifiQr" class="qrbox"></div>
+    <div class="wifiText">Network <b>${esc(wifi.ssid)}</b><br>Password <b>${esc(wifi.password)}</b></div>
+    <div class="step"><span class="num">2</span> Open the game</div>` : `<p class="muted" style="margin:4px 0 0">Same Wi-Fi, then scan or type:</p>`;
+  return `<div class="card joinPanel"><h3 style="margin:0">Join on your phone</h3>${wifiStep}
+    <div id="boardQr" class="qrbox"></div>${(joinUrls || []).map(u => `<div class="url">${esc(u)}</div>`).join('')}</div>`;
+}
+function drawQr(box, text) {
+  if (!box) return;
+  if (!text || !window.qrcode) { box.hidden = true; return; }
+  const q = qrcode(0, 'M'); q.addData(text); q.make();
+  box.innerHTML = q.createImgTag(6, 0);
 }
 function drawBoardQr() {
-  const box = $('#boardQr');
-  if (!box || !joinUrls || !joinUrls[0] || !window.qrcode) { if (box) box.hidden = true; return; }
-  const q = qrcode(0, 'M'); q.addData(joinUrls[0]); q.make();
-  box.innerHTML = q.createImgTag(8, 0);
+  drawQr($('#wifiQr'), wifi && wifi.qr);
+  drawQr($('#boardQr'), joinUrls && joinUrls[0]);
 }
 
 function entryStatus(e) {
@@ -385,13 +397,13 @@ function deal(n, lucky) {
 
 // ---- card reader: photo -> local vision model on the computer -> hand to check ----
 let scanning = false;
-async function shrinkPhoto(file, max = 1280) {
+async function shrinkPhoto(file, max = 1024) { // the reader resizes anyway; smaller is a quicker upload
   const img = await createImageBitmap(file);
   const k = Math.min(1, max / Math.max(img.width, img.height));
   const c = document.createElement('canvas');
   c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  return c.toDataURL('image/jpeg', 0.8).split(',')[1];
 }
 async function scanPhoto(file) {
   const pid = editing;

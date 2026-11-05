@@ -3,3 +3,5 @@ state.json.bak
 *.log
 testrun/
 scans/
+.env
+logs/
