@@ -24,7 +24,8 @@ function save() {
 }
 
 const Rules = require('./public/rules.js');
-const RULES_JS = path.join(__dirname, 'public', 'rules.js');
+// Scripts the page loads, all served from this machine so game night needs no internet.
+const SCRIPTS = { '/rules.js': 'rules.js', '/qrcode.min.js': 'qrcode.min.js' };
 const MODES = ['classic', 'vengeance', 'brutal'];
 
 // Rebuild an entry from known fields only, so stored state is always plain numbers and booleans.
@@ -255,8 +256,8 @@ http.createServer((req, res) => {
     });
     return;
   }
-  if (req.url === '/rules.js') {
-    return fs.readFile(RULES_JS, (err, js) => {
+  if (SCRIPTS[req.url]) {
+    return fs.readFile(path.join(__dirname, 'public', SCRIPTS[req.url]), (err, js) => {
       res.writeHead(err ? 404 : 200, { 'Content-Type': 'text/javascript; charset=utf-8' });
       res.end(err ? '' : js);
     });
