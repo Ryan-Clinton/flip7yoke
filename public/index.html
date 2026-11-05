@@ -78,6 +78,17 @@
   td.wiped { color: var(--bad); font-weight: 700; }
   .neg { color: var(--bad); }
   .done { color: var(--good); font-weight: 700; }
+  .hand { display: flex; flex-wrap: wrap; gap: 6px; min-height: 40px; align-items: center; margin: 6px 0; }
+  .chip { padding: 6px 10px; font-size: 18px; font-weight: 700; background: var(--ink); color: var(--bg); border-radius: 10px; }
+  .chip i { font-style: normal; font-size: 12px; margin-left: 6px; opacity: .5; }
+  .tagc { font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 8px; background: var(--accent); color: #1a1a1a; }
+  .tagc.good { background: var(--good); }
+  .note { text-align: center; color: var(--accent); font-weight: 600; margin: 2px 0 6px; }
+  .big.busted { color: var(--bad); }
+  .grid.dim { opacity: .35; }
+  .grid.specials { grid-template-columns: 1fr 1fr; margin-top: 0; }
+  .grid.specials button { font-size: 16px; }
+  button:disabled { opacity: .4; }
   /* phone view */
   .me { text-align: center; }
   .me .total { font-size: 64px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -207,7 +218,9 @@ function renderPhone() {
     html += `<div class="card">${e
       ? `<div style="text-align:center"><div class="done">✓ Round ${S.rounds.length + 1} score sent</div><div style="margin:6px 0 10px">${entryStatus(e)}</div>
          <button id="mine" style="width:100%">Change my score</button></div>`
-      : `<button class="primary bigbtn" id="mine">Enter my round ${S.rounds.length + 1} score</button>`}
+      : (w => w && w.cards && w.cards.length
+          ? `<button class="primary bigbtn" id="mine">Continue my hand (${entryScore(w)} so far)</button>`
+          : `<button class="primary bigbtn" id="mine">Deal me in: round ${S.rounds.length + 1}</button>`)(loadWip(me.id))}
       <p class="muted" style="text-align:center;margin:10px 0 0">${S.finishing ? 'All scores in, finishing the round…' : `${entered} of ${S.players.length} scores in`}</p></div>`;
   }
   html += `<h2>Standings</h2><div class="card">${ranked.map((p, i) => `<div class="stand ${p.id === me.id ? 'you' : ''}">
@@ -309,15 +322,56 @@ function addPlayer(ev) {
 }
 
 // ---- round entry sheet ----
-let E, editing;
+// A hand being dealt is kept on this device until it's saved, so a locked screen or a closed sheet loses nothing.
+const wipKey = pid => `flip7.wip.${pid}.${S.rounds.length}`;
+const loadWip = pid => { try { return JSON.parse(localStorage.getItem(wipKey(pid))); } catch { return null; } };
+const saveWip = (pid, e) => { try { localStorage.setItem(wipKey(pid), JSON.stringify(e)); } catch {} };
+const dropWip = pid => { try { localStorage.removeItem(wipKey(pid)); } catch {} };
+
+let E, editing, H = [], note = '';
 function openEntry(pid) {
   editing = pid;
-  const cur = S.draft[pid];
+  const cur = S.draft[pid] || loadWip(pid);
   E = cur ? JSON.parse(JSON.stringify(cur)) : { cards: [], mods: [], bust: false };
   E.cards ||= []; E.mods ||= [];
+  H = []; note = '';
   drawEntry();
   $('#entrySheet').classList.add('open');
 }
+
+// Every change goes through here so Undo can step back one tap at a time.
+function change(fn) {
+  H.push(JSON.stringify(E));
+  note = '';
+  fn();
+  if (!Rules.isFlip7(E)) delete E.hit;
+  drawEntry();
+}
+
+// Deal one number card into the hand, applying bust / Second Chance / Lucky 13 automatically.
+function deal(n, lucky) {
+  const V = veng();
+  const have = E.cards.filter(x => x === n).length;
+  delete E.manual;
+  if (E.bust || Rules.isFlip7(E)) { note = E.bust ? 'Already busted. Undo if that was a mistake.' : 'Already a Flip 7!'; return; }
+  let ok = have === 0;
+  if (V && n === 13) {
+    if (lucky && E.lucky) { note = 'There is only one Lucky 13.'; return; }
+    ok = have === 0 || (have === 1 && (lucky || E.lucky)); // Lucky 13 lets you hold one other 13
+  }
+  if (ok) {
+    E.cards.push(n);
+    if (lucky) E.lucky = true;
+    if (V && n === 0) E.wipe = true; // The Zero: total wiped unless you Flip 7
+    if (Rules.isFlip7(E)) note = 'FLIP 7! The round is over.';
+  } else if (!V && E.chance) {
+    E.chance = false;
+    note = `Second Chance used: the extra ${n} is discarded.`;
+  } else {
+    E.bust = true; E.dup = n;
+  }
+}
+
 function drawEntry() {
   const p = S.players.find(p => p.id === editing);
   const V = veng(), brutal = mode() === 'brutal';
@@ -325,20 +379,24 @@ function drawEntry() {
   const flip7 = Rules.isFlip7(E);
   const manual = typeof E.manual === 'number';
   const hasZero = V && E.cards.includes(0);
-  const count = n => E.cards.filter(x => x === n).length;
-  const caption = E.bust ? (score ? 'Busted, modifiers still hit' : 'Busted')
+  const done = E.bust || flip7;
+  const caption = E.bust ? `BUST${Number.isInteger(E.dup) ? ` (second ${E.dup})` : ''}${score ? ', modifiers still hit' : ''}`
     : flip7 ? (brutal && E.hit ? `FLIP 7! −15 to ${esc(nameOf(E.hit))}` : 'FLIP 7! (+15 bonus)')
     : manual ? 'Typed score'
-    : hasZero ? 'The Zero: scores 0 unless you Flip 7'
-    : `${E.cards.length} number card${E.cards.length === 1 ? '' : 's'}`;
+    : hasZero ? `The Zero: scores 0 unless you Flip 7 · ${E.cards.length}/7 cards`
+    : `${E.cards.length}/7 cards`;
 
-  // Classic: 0-12 plus ×2. Vengeance: 0 is The Zero, 1-13 with Lucky 13 (tap 13 twice for two).
+  const chips = E.cards.map((c, i) => `<button class="chip" data-rm="${i}">${V && c === 0 ? 'Zero' : c}<i>✕</i></button>`).join('')
+    + (E.lucky ? '<span class="tagc">Lucky 13</span>' : '') + (E.unlucky ? '<span class="tagc">Unlucky 7</span>' : '')
+    + (E.chance ? '<span class="tagc good">Second Chance held</span>' : '');
   const top = V ? 13 : 12;
   const numBtns = Array.from({ length: top + 1 }, (_, n) => {
-    const c = count(n);
-    const label = V && n === 0 ? `0<span class="c">Zero</span>` : V && n === 13 && c === 2 ? `13<span class="c">×2 Lucky</span>` : n;
-    return `<button data-n="${n}" class="${c === 2 ? 'two' : c ? 'on' : ''}">${label}</button>`;
+    const c = E.cards.filter(x => x === n).length;
+    return `<button data-n="${n}" class="${c === 2 ? 'two' : c ? 'on' : ''}">${V && n === 0 ? '0<span class="c">Zero</span>' : n}</button>`;
   }).join('');
+  const special = V
+    ? `<button data-lucky class="${E.lucky ? 'on' : ''}">Lucky 13</button><button data-unlucky class="${E.unlucky ? 'on' : ''}">Unlucky 7</button>`
+    : `<button data-x2 class="${E.x2 ? 'on' : ''}">×2</button><button data-chance class="${E.chance ? 'on' : ''}">Second Chance</button>`;
   const modBtns = V
     ? `<button data-half class="${E.half ? 'on' : ''}">÷2</button>` + [2, 4, 6, 8, 10].map(m => `<button data-m="${m}" class="${E.mods.includes(m) ? 'on' : ''}">−${m}</button>`).join('')
     : [2, 4, 6, 8, 10].map(m => `<button data-m="${m}" class="${E.mods.includes(m) ? 'on' : ''}">+${m}</button>`).join('');
@@ -350,52 +408,71 @@ function drawEntry() {
 
   $('#entryBody').innerHTML = `
     <h3>${esc(p.name)}</h3>
-    <div class="big ${score < 0 ? 'neg' : ''}">${score}<small>${caption}${Rules.wipes(E) ? ' · total wiped to 0' : ''}</small></div>
-    <div class="label">Number cards kept</div>
-    <div class="grid nums">${numBtns}${V ? '' : `<button data-x2 class="${E.x2 ? 'on' : ''}" style="grid-column:span 2">×2</button>`}</div>
+    <div class="big ${score < 0 ? 'neg' : ''} ${E.bust ? 'busted' : ''}">${score}<small>${caption}${Rules.wipes(E) ? ' · total wiped to 0' : ''}</small></div>
+    ${note ? `<div class="note">${esc(note)}</div>` : ''}
+    <div class="hand">${chips || '<span class="muted">Tap each card as it\'s dealt to you</span>'}</div>
+    <div class="label">Number cards</div>
+    <div class="grid nums ${done ? 'dim' : ''}">${numBtns}</div>
+    <div class="grid specials">${special}</div>
     <div class="label">Modifiers${brutal ? ' (count even if busted)' : ''}</div>
     <div class="grid mods" style="${V ? 'grid-template-columns:repeat(6,1fr)' : ''}">${modBtns}</div>
     ${hitPicker}
     <div class="row" style="margin-top:10px">
+      <button data-undo style="flex:1" ${H.length ? '' : 'disabled'}>↶ Undo</button>
       <button class="bust ${E.bust ? 'on' : ''}" data-bust style="flex:1">Bust</button>
       <input type="number" inputmode="numeric" placeholder="or type score" id="manual" value="${manual ? E.manual : ''}" style="flex:1.3">
     </div>
     <button class="wipe ${E.wipe ? 'on' : ''}" data-wipe style="width:100%;margin-top:8px">${E.wipe ? 'Total will be wiped to 0 (tap to cancel)' : BOARD ? 'Zero their total' : 'Zero my total'}</button>
     <div class="actions">
-      <button data-clear>${S.draft[editing] ? 'Clear' : 'Cancel'}</button>
+      <button data-clear>${S.draft[editing] ? 'Clear' : E.cards.length ? 'Start over' : 'Cancel'}</button>
       <button class="primary" data-save>Save ${score}</button>
     </div>
     <p class="muted" style="text-align:center"><button class="ghost" data-rename>Rename</button>${BOARD ? ' · <button class="ghost" data-remove>Remove player</button>' : ''}</p>`;
+  if (!S.draft[editing]) saveWip(editing, E);
+
   const b = $('#entryBody');
-  const tweak = fn => () => { fn(); delete E.manual; if (!brutal || !E.bust) E.bust = false; drawEntry(); };
-  b.querySelectorAll('[data-n]').forEach(el => el.onclick = () => {
-    const n = +el.dataset.n, c = count(n);
-    const max = V && n === 13 ? 2 : 1; // Lucky 13 allows a second 13
-    E.cards = E.cards.filter(x => x !== n).concat(c < max ? Array(c + 1).fill(n) : []);
-    if (V && n === 0) E.wipe = c < max; // The Zero wipes the total unless a Flip 7 saves it
-    delete E.manual; E.bust = false;
-    if (!Rules.isFlip7(E)) delete E.hit;
-    drawEntry();
-  });
-  b.querySelectorAll('[data-m]').forEach(el => el.onclick = tweak(() => {
+  b.querySelectorAll('[data-n]').forEach(el => el.onclick = () => change(() => deal(+el.dataset.n)));
+  b.querySelectorAll('[data-rm]').forEach(el => el.onclick = () => change(() => {
+    const [gone] = E.cards.splice(+el.dataset.rm, 1);
+    if (gone === 13 && E.lucky && !E.cards.includes(13)) delete E.lucky;
+    if (gone === 0 && V) delete E.wipe;
+    if (gone === 7) delete E.unlucky;
+  }));
+  if (V) {
+    b.querySelector('[data-lucky]').onclick = () => change(() => deal(13, true));
+    // Unlucky 7: throw away every other number and modifier card, keep only the 7.
+    b.querySelector('[data-unlucky]').onclick = () => change(() => {
+      if (E.bust || Rules.isFlip7(E)) return;
+      E.cards = [7]; E.mods = []; E.half = false; E.unlucky = true;
+      delete E.lucky; delete E.wipe; delete E.manual;
+      note = 'Unlucky 7: everything else discarded.';
+    });
+    b.querySelector('[data-half]').onclick = () => change(() => { E.half = !E.half; });
+  } else {
+    b.querySelector('[data-x2]').onclick = () => change(() => { E.x2 = !E.x2; });
+    b.querySelector('[data-chance]').onclick = () => change(() => { E.chance = !E.chance; });
+  }
+  b.querySelectorAll('[data-m]').forEach(el => el.onclick = () => change(() => {
     const m = +el.dataset.m;
     E.mods = E.mods.includes(m) ? E.mods.filter(x => x !== m) : [...E.mods, m];
   }));
-  if (V) b.querySelector('[data-half]').onclick = tweak(() => { E.half = !E.half; });
-  else b.querySelector('[data-x2]').onclick = tweak(() => { E.x2 = !E.x2; });
-  b.querySelectorAll('[data-hit]').forEach(el => el.onclick = () => {
+  b.querySelectorAll('[data-hit]').forEach(el => el.onclick = () => change(() => {
     if (el.dataset.hit) E.hit = el.dataset.hit; else delete E.hit;
-    drawEntry();
-  });
-  b.querySelector('[data-bust]').onclick = () => { E.bust = !E.bust; if (E.bust) delete E.hit; drawEntry(); };
-  b.querySelector('[data-wipe]').onclick = () => { E.wipe = !E.wipe; drawEntry(); };
-  b.querySelector('#manual').onchange = ev => {
+  }));
+  b.querySelector('[data-undo]').onclick = () => { if (H.length) { E = JSON.parse(H.pop()); note = ''; drawEntry(); } };
+  b.querySelector('[data-bust]').onclick = () => change(() => { E.bust = !E.bust; delete E.dup; });
+  b.querySelector('[data-wipe]').onclick = () => change(() => { E.wipe = !E.wipe; });
+  b.querySelector('#manual').onchange = ev => change(() => {
     const v = ev.target.value.trim();
-    if (v === '' || isNaN(+v)) delete E.manual; else { E.manual = Math.trunc(+v); E.bust = false; delete E.hit; }
-    drawEntry();
+    if (v === '' || isNaN(+v)) delete E.manual; else { E.manual = Math.trunc(+v); E.bust = false; }
+  });
+  b.querySelector('[data-save]').onclick = () => { act('setEntry', { id: editing, entry: E }); dropWip(editing); closeSheets(); };
+  b.querySelector('[data-clear]').onclick = () => {
+    if (S.draft[editing]) act('clearEntry', { id: editing });
+    dropWip(editing);
+    closeSheets();
+    render();
   };
-  b.querySelector('[data-save]').onclick = () => { act('setEntry', { id: editing, entry: E }); closeSheets(); };
-  b.querySelector('[data-clear]').onclick = () => { if (S.draft[editing]) act('clearEntry', { id: editing }); closeSheets(); };
   b.querySelector('[data-rename]').onclick = () => {
     const n = prompt('Rename player', p.name);
     if (n && n.trim()) act('renamePlayer', { id: p.id, name: n });

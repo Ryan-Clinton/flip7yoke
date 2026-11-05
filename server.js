@@ -33,8 +33,9 @@ function cleanEntry(e) {
   const ints = (a, lo, hi, max) => (Array.isArray(a) ? a : [])
     .filter(n => Number.isInteger(n) && n >= lo && n <= hi).slice(0, max);
   const out = { cards: ints(e.cards, 0, 13, 20), mods: [...new Set(ints(e.mods, 2, 10, 5))] };
-  for (const k of ['bust', 'x2', 'half', 'wipe']) if (e[k] === true) out[k] = true;
+  for (const k of ['bust', 'x2', 'half', 'wipe', 'lucky', 'unlucky', 'chance']) if (e[k] === true) out[k] = true;
   if (Number.isFinite(e.manual)) out.manual = Math.max(-9999, Math.min(9999, Math.trunc(e.manual)));
+  if (Number.isInteger(e.dup) && e.dup >= 0 && e.dup <= 13) out.dup = e.dup;
   if (typeof e.hit === 'string' && state.players.some(p => p.id === e.hit)) out.hit = e.hit;
   return out;
 }
