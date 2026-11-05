@@ -113,7 +113,7 @@ const veng = () => Rules.isVengeance(mode());
 const entryScore = e => Rules.entryScore(e, mode());
 const nameOf = id => (S.players.find(p => p.id === id) || {}).name || '?';
 
-const act = (type, args = {}) => fetch('/api/action', { method: 'POST', body: JSON.stringify({ type, ...args }) });
+const act = (type, args = {}) => fetch('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...args }) });
 const totals = () => Rules.totals(S);
 
 function connect() {

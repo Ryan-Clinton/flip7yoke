@@ -26,6 +26,18 @@ const Rules = require('./public/rules.js');
 const RULES_JS = path.join(__dirname, 'public', 'rules.js');
 const MODES = ['classic', 'vengeance', 'brutal'];
 
+// Rebuild an entry from known fields only, so stored state is always plain numbers and booleans.
+function cleanEntry(e) {
+  e = e && typeof e === 'object' ? e : {};
+  const ints = (a, lo, hi, max) => (Array.isArray(a) ? a : [])
+    .filter(n => Number.isInteger(n) && n >= lo && n <= hi).slice(0, max);
+  const out = { cards: ints(e.cards, 0, 13, 20), mods: [...new Set(ints(e.mods, 2, 10, 5))] };
+  for (const k of ['bust', 'x2', 'half', 'wipe']) if (e[k] === true) out[k] = true;
+  if (Number.isFinite(e.manual)) out.manual = Math.max(-9999, Math.min(9999, Math.trunc(e.manual)));
+  if (typeof e.hit === 'string' && state.players.some(p => p.id === e.hit)) out.hit = e.hit;
+  return out;
+}
+
 const actions = {
   addPlayer({ name }) {
     name = String(name || '').trim().slice(0, 20);
@@ -41,14 +53,15 @@ const actions = {
     if (p && name) p.name = name;
   },
   setEntry({ id, entry }) {
-    if (state.players.some(p => p.id === id)) state.draft[id] = entry;
+    if (state.players.some(p => p.id === id)) state.draft[id] = cleanEntry(entry);
   },
   clearEntry({ id }) { delete state.draft[id]; },
   commitRound() {
     const scores = {}, zero = [];
     for (const p of state.players) {
       const e = state.draft[p.id];
-      scores[p.id] = Rules.entryScore(e, state.mode);
+      const sc = Rules.entryScore(e, state.mode);
+      scores[p.id] = Number.isFinite(sc) ? sc : 0;
       if (Rules.wipes(e)) zero.push(p.id);
     }
     if (state.mode === 'brutal') {
@@ -62,7 +75,7 @@ const actions = {
   },
   editScore({ round, id, score }) {
     const r = state.rounds[round];
-    if (r && Number.isFinite(score)) {
+    if (r && Number.isFinite(score) && typeof id === 'string') {
       r.scores[id] = Math.trunc(score);
       r.zero = (r.zero || []).filter(z => z !== id); // typing a number undoes a wipe
     }
@@ -71,7 +84,7 @@ const actions = {
     if (MODES.includes(mode) && mode !== state.mode) { state.mode = mode; state.draft = {}; }
   },
   deleteRound({ round }) { state.rounds.splice(round, 1); },
-  setTarget({ target }) { if (target > 0) state.target = Math.trunc(target); },
+  setTarget({ target }) { if (Number.isFinite(target) && target > 0) state.target = Math.trunc(target); },
   newGame() { state.rounds = []; state.draft = {}; },
 };
 
@@ -95,6 +108,8 @@ http.createServer((req, res) => {
     return res.end(JSON.stringify({ urls: lanUrls() }));
   }
   if (req.url === '/api/action' && req.method === 'POST') {
+    // A JSON content type forces a CORS preflight, which this server never approves, so other sites can't post here.
+    if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return res.writeHead(415).end();
     let body = '';
     req.on('data', c => { body += c; if (body.length > 1e5) req.destroy(); });
     req.on('end', () => {
