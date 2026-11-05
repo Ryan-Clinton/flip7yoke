@@ -123,15 +123,27 @@ function scheduleAuto() {
 const OLLAMA = new URL(process.env.OLLAMA_URL || 'http://127.0.0.1:11434');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3-vl:4b-instruct' // ~2s per photo on a GTX 1080, read both test hands exactly;
 
-const CARD_GUIDE = {
-  classic: `Number cards show one big number from 0 to 12.
-Modifier cards show +2, +4, +6, +8, +10 or x2.
-Action cards: "Freeze", "Flip Three", "Second Chance".`,
-  vengeance: `Number cards show one big number from 0 to 13. The 0 card may say "The Zero".
+// One guide covering both decks: the rules setting may not match the cards on the table,
+// and telling the model "0 to 12" made it (and our filter) drop real 13s.
+const CARD_GUIDE = `The cards may come from the original Flip 7 deck or from Flip 7 With a Vengeance.
+Number cards show one big number from 0 to 13. The 0 card may say "The Zero".
 Special number cards: "Lucky 13" (a 13 with a lucky label) and "Unlucky 7" (a 7 with an unlucky label).
-Modifier cards show -2, -4, -6, -8, -10 or ÷2 (divide by two).
-Action cards: "Just One More", "Flip Four", "Discard", "Steal", "Swap".`,
-};
+Modifier cards show +2, +4, +6, +8, +10, x2, -2, -4, -6, -8, -10 or ÷2 (divide by two).
+Action cards: "Freeze", "Flip Three", "Second Chance", "Just One More", "Flip Four", "Discard", "Steal", "Swap".`;
+
+// Keep the last few photos and readings on this machine so a misread can be looked at afterwards.
+const SCANS_DIR = path.join(__dirname, 'scans');
+const SCANS_KEEP = 30;
+function keepScan(imageB64, got, hand) {
+  try {
+    fs.mkdirSync(SCANS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(SCANS_DIR, `${stamp}.jpg`), Buffer.from(imageB64, 'base64'));
+    fs.writeFileSync(path.join(SCANS_DIR, `${stamp}.json`), JSON.stringify({ mode: state.mode, model: OLLAMA_MODEL, read: got, hand }, null, 2));
+    const old = fs.readdirSync(SCANS_DIR).filter(f => f.endsWith('.jpg')).sort().slice(0, -SCANS_KEEP);
+    for (const f of old) for (const ext of ['.jpg', '.json']) fs.rmSync(path.join(SCANS_DIR, f.replace(/\.jpg$/, ext)), { force: true });
+  } catch (e) { console.log('Could not save scan:', e.message); }
+}
 const SCAN_SCHEMA = {
   type: 'object',
   properties: {
@@ -176,8 +188,8 @@ async function scanCards(imageB64) {
     messages: [{
       role: 'user',
       images: [imageB64],
-      content: `This photo shows one player's hand from the card game Flip 7${V ? ' With a Vengeance' : ''}, laid out on a table.
-${CARD_GUIDE[V ? 'vengeance' : 'classic']}
+      content: `This photo shows one player's hand from the card game Flip 7, laid out on a table.
+${CARD_GUIDE}
 List every card you can see. Ignore action cards, card backs and anything that is not a card.
 Each card goes in exactly one list: a card printed with a sign (+, -, x, ÷) is a modifier, never a number card.
 Read the big number in the middle or corner of each card. Do not guess cards you cannot see.`,
@@ -185,19 +197,28 @@ Read the big number in the middle or corner of each card. Do not guess cards you
   });
   const got = JSON.parse(reply.message.content);
   const hand = { cards: [], mods: [] };
-  const top = V ? 13 : 12;
-  for (const n of got.numbers || []) if (Number.isInteger(n) && n >= 0 && n <= top) hand.cards.push(n);
+  let vengeanceCards = false; // anything that only exists in the Vengeance deck
+  for (const n of got.numbers || []) if (Number.isInteger(n) && n >= 0 && n <= 13) {
+    hand.cards.push(n);
+    if (n === 13) vengeanceCards = true;
+  }
   for (const raw of got.modifiers || []) {
     const m = String(raw).replace(/\s/g, '').toLowerCase();
     if (/^(x|×|\*)2$/.test(m)) { if (!V) hand.x2 = true; continue; }
-    if (/^(÷|\/|:)2$/.test(m)) { if (V) hand.half = true; continue; }
+    if (/^(÷|\/|:)2$/.test(m)) { vengeanceCards = true; if (V) hand.half = true; continue; }
+    const minus = /^[−-]/.test(m);
     const v = Math.abs(parseInt(m.replace(/^[+−-]/, ''), 10));
-    if ([2, 4, 6, 8, 10].includes(v) && !hand.mods.includes(v)) hand.mods.push(v);
+    if (minus) vengeanceCards = true;
+    // Only count modifiers that belong to the deck the rules are set to: +N in Classic, -N in Vengeance.
+    if ([2, 4, 6, 8, 10].includes(v) && minus === V && !hand.mods.includes(v)) hand.mods.push(v);
   }
   const sp = got.specials || [];
+  if (sp.includes('lucky13') || sp.includes('unlucky7')) vengeanceCards = true;
   if (V && sp.includes('lucky13')) { hand.lucky = true; if (!hand.cards.includes(13)) hand.cards.push(13); }
   if (V && sp.includes('unlucky7')) { hand.unlucky = true; if (!hand.cards.includes(7)) hand.cards.push(7); }
   if (!V && sp.includes('second_chance')) hand.chance = true;
+  if (!V && vengeanceCards) hand.deckHint = 'vengeance';
+  keepScan(imageB64, got, hand);
   return hand;
 }
 

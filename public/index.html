@@ -413,7 +413,9 @@ async function scanPhoto(file) {
       }
       if (V && E.cards.includes(0)) E.wipe = true;
       const seen = E.cards.length + E.mods.length + ['x2', 'half', 'chance'].filter(k => E[k]).length;
-      note = seen ? 'Check these against your cards, then Save.' : "Couldn't make out any cards. Try again closer, flat and in good light.";
+      note = !seen ? "Couldn't make out any cards. Try again closer, flat and in good light."
+        : hand.deckHint === 'vengeance' ? 'These look like Vengeance cards but the game is on Classic rules. Switch rules in the ⋯ menu on the board, then snap again.'
+        : 'Check these against your cards, then Save.';
     });
   } catch (e) {
     scanning = false;

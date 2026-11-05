@@ -2,3 +2,4 @@ state.json
 state.json.bak
 *.log
 testrun/
+scans/
