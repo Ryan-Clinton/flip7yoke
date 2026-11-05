@@ -6,3 +6,4 @@ scans/
 .env
 logs/
 history.json
+tests/.tmp/

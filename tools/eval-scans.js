@@ -1,13 +1,19 @@
-// Card-reader accuracy test: sends real game-night photos from scans/ through /api/scan and compares
-// with the hands checked by eye. Run with the score keeper (and Ollama) running:
-//   node tools/eval-scans.js [http://localhost:7777]
-// scans/ is gitignored (it holds photos from the night), so this only works on the machine that has them.
+// Card-reader accuracy test: sends real game-night photos through /api/scan and compares them with the
+// hands checked by eye. Run with the score keeper (and Ollama) running, with the game on Vengeance rules:
+//   node tools/eval-scans.js [--url http://localhost:7777] [--dir scans]
+// The photos are gitignored (they're from a real game night), so this only works where they are.
+// Fails (exit code 1) if any expected photo is missing, the server isn't on Vengeance, or any reading is wrong.
 // Add new photos to TRUTH after checking them by eye; keep the stamp (yyyy-mm-ddThh-mm-ss part of the filename).
 const fs = require('fs');
 const path = require('path');
 
-const BASE = process.argv[2] || 'http://localhost:7777';
-const SCANS = path.join(__dirname, '..', 'scans');
+const arg = (name, def) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : def;
+};
+// The old form `node tools/eval-scans.js http://...` still works.
+const BASE = arg('--url', process.argv[2] && /^https?:/.test(process.argv[2]) ? process.argv[2] : 'http://localhost:7777');
+const SCANS = path.resolve(arg('--dir', path.join(__dirname, '..', 'scans')));
 
 // stamp -> [number cards sorted, minus-modifier values sorted]   (game played in Vengeance mode)
 const TRUTH = {
@@ -29,22 +35,41 @@ const TRUTH = {
 };
 
 (async () => {
+  let files = [];
+  try { files = fs.readdirSync(SCANS); } catch {}
+  const missing = Object.keys(TRUTH).filter(stamp => !files.some(f => f.startsWith(stamp) && f.endsWith('.jpg')));
+  if (missing.length) {
+    console.log(`FAIL: ${missing.length} of ${Object.keys(TRUTH).length} photos not found in ${SCANS}:\n  ${missing.join('\n  ')}`);
+    process.exit(1);
+  }
+  let mode;
+  try { mode = (await (await fetch(`${BASE}/api/status`)).json()).mode; } catch (e) {
+    console.log(`FAIL: no score keeper at ${BASE} (${e.cause ? e.cause.code : e.message})`);
+    process.exit(1);
+  }
+  if (mode !== 'vengeance') {
+    console.log(`FAIL: the game at ${BASE} is on ${mode} rules; these photos need Vengeance (switch in the board's menu).`);
+    process.exit(1);
+  }
+
   let right = 0, n = 0, ms = 0;
   for (const [stamp, truth] of Object.entries(TRUTH)) {
-    const file = fs.readdirSync(SCANS).find(f => f.startsWith(stamp) && f.endsWith('.jpg'));
-    if (!file) { console.log('skip (photo not here)', stamp); continue; }
+    const file = files.find(f => f.startsWith(stamp) && f.endsWith('.jpg'));
     const t = Date.now();
     const res = await fetch(`${BASE}/api/scan`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Flip7-Test': '1' }, // not saved to scans/
       body: JSON.stringify({ image: fs.readFileSync(path.join(SCANS, file)).toString('base64') }),
     });
     ms += Date.now() - t;
+    n++;
     const hand = await res.json();
-    if (!res.ok) { console.log('ERROR', stamp, hand.error); n++; continue; }
+    if (!res.ok) { console.log('ERROR', stamp, hand.error); continue; }
     const got = [[...hand.cards].sort((a, b) => a - b), [...hand.mods].sort((a, b) => a - b)];
     const ok = JSON.stringify(got) === JSON.stringify(truth);
-    right += ok; n++;
+    right += ok;
     console.log(`${ok ? 'ok  ' : 'MISS'} ${stamp} got ${JSON.stringify(got)}${ok ? '' : ' want ' + JSON.stringify(truth)}`);
   }
-  console.log(`\n${right}/${n} correct, ${(ms / Math.max(n, 1) / 1000).toFixed(1)}s per photo`);
+  const total = Object.keys(TRUTH).length;
+  console.log(`\n${right}/${total} correct, ${(ms / n / 1000).toFixed(1)}s per photo`);
+  process.exit(right === total ? 0 : 1);
 })();

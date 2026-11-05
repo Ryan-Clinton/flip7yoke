@@ -1,4 +1,4 @@
-# Flip 7 control window: start and stop the score keeper (Windows Node) and the card reader (Ollama in WSL).
+# Flip 7 control window: start and stop the score keeper (Node) and the card reader (Ollama for Windows).
 # Runs standalone, so Start works when nothing else is running. Closing the window leaves the game running.
 # Also usable without the window: Flip7.ps1 -Action start | stop | status
 param([ValidateSet('gui', 'start', 'stop', 'status')] [string]$Action = 'gui')
@@ -27,10 +27,27 @@ function Get-FlipProcs {
     Sort-Object { $_.CommandLine -notmatch 'run\.js' }
 }
 
+# Ollama for Windows. If it's already running (the Ollama tray app usually starts it), we use it and leave it
+# running; we only ever stop an ollama.exe that we started ourselves, recorded by PID in logs\ollama.pid.
+$OllamaExe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+$OllamaPidFile = Join-Path $LogDir 'ollama.pid'
+$ReaderModel = 'qwen3-vl:4b-instruct'
+
+function Get-OurOllama {
+  if (-not (Test-Path $OllamaPidFile)) { return $null }
+  $id = [int](Get-Content $OllamaPidFile -TotalCount 1)
+  $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+  if ($p -and $p.Path -eq $OllamaExe) { return $p }
+  Remove-Item $OllamaPidFile -ErrorAction SilentlyContinue
+  return $null
+}
+
 function Start-Flip {
-  if (-not (Get-Json "$ReaderUrl/api/version")) {
-    # exec makes Ollama take over bash's PID, so the PID file points at Ollama itself for Stop.
-    Start-Process wsl.exe -WindowStyle Hidden -ArgumentList '-e bash -lc "echo $$ > ~/ollama/serve.pid; exec ~/ollama/bin/ollama serve >> ~/ollama/serve.log 2>&1"'
+  if (-not (Get-Json "$ReaderUrl/api/version") -and (Test-Path $OllamaExe)) {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    $p = Start-Process $OllamaExe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
+      -RedirectStandardError (Join-Path $LogDir 'ollama.log') -RedirectStandardOutput (Join-Path $LogDir 'ollama.out.log')
+    Set-Content -Path $OllamaPidFile -Value $p.Id -Encoding ascii
   }
   if (-not (Get-FlipProcs)) {
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -41,9 +58,13 @@ function Start-Flip {
 
 function Stop-Flip {
   Get-FlipProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-  if (Get-Json "$ReaderUrl/api/version") {
-    Start-Process wsl.exe -WindowStyle Hidden -Wait -ArgumentList '-e bash -lc "test -f ~/ollama/serve.pid && kill $(cat ~/ollama/serve.pid); rm -f ~/ollama/serve.pid"'
-  }
+  # Free the GPU: unload the model whoever runs Ollama, then stop Ollama only if we started it.
+  try {
+    $body = '{"model":"' + $ReaderModel + '","keep_alive":0}'
+    Invoke-RestMethod -Uri "$ReaderUrl/api/generate" -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 5 | Out-Null
+  } catch {}
+  $ours = Get-OurOllama
+  if ($ours) { Stop-Process -Id $ours.Id -Force -ErrorAction SilentlyContinue; Remove-Item $OllamaPidFile -ErrorAction SilentlyContinue }
 }
 
 function Get-FlipStatus {
@@ -61,7 +82,8 @@ function Get-FlipStatus {
       $gb = [math]::Round($ps.models[0].size_vram / 1GB, 1)
       @{ On = $true; Text = "Running: model loaded on the GPU ($gb GB)" }
     } else { @{ On = $true; Text = 'Running: model loads on the first photo' } }
-  } else { @{ On = $false; Text = 'Stopped' } }
+  } elseif (-not (Test-Path $OllamaExe)) { @{ On = $false; Text = 'Not installed (the camera button is hidden)' } }
+  else { @{ On = $false; Text = 'Stopped' } }
 
   return @{ Score = $score; Reader = $reader; Phone = $phone }
 }
