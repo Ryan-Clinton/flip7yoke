@@ -89,6 +89,7 @@
   .grid.specials { grid-template-columns: 1fr 1fr; margin-top: 0; }
   .grid.specials button { font-size: 16px; }
   button:disabled { opacity: .4; }
+  button.saved:disabled { opacity: 1; background: var(--good); color: #1a1a1a; font-weight: 700; }
   .snap { display: block; text-align: center; padding: 14px; margin: 6px 0 2px; border-radius: 12px; background: var(--panel2); border: 1px dashed var(--muted); font-weight: 700; font-size: 18px; cursor: pointer; }
   .snap.busy { opacity: .6; border-style: solid; }
   /* phone view */
@@ -431,9 +432,10 @@ function drawEntry() {
   const flip7 = Rules.isFlip7(E);
   const manual = typeof E.manual === 'number';
   const hasZero = V && E.cards.includes(0);
+  const zeroSaved = hasZero && flip7; // a Flip 7 cancels The Zero, so nothing gets wiped
   const done = E.bust || flip7;
   const caption = E.bust ? `BUST${Number.isInteger(E.dup) ? ` (second ${E.dup})` : ''}${score ? ', modifiers still hit' : ''}`
-    : flip7 ? (brutal && E.hit ? `FLIP 7! −15 to ${esc(nameOf(E.hit))}` : 'FLIP 7! (+15 bonus)')
+    : flip7 ? (brutal && E.hit ? `FLIP 7! −15 to ${esc(nameOf(E.hit))}` : 'FLIP 7! (+15 bonus)') + (zeroSaved ? ' · The Zero is cancelled' : '')
     : manual ? 'Typed score'
     : hasZero ? `The Zero: scores 0 unless you Flip 7 · ${E.cards.length}/7 cards`
     : `${E.cards.length}/7 cards`;
@@ -475,7 +477,9 @@ function drawEntry() {
       <button class="bust ${E.bust ? 'on' : ''}" data-bust style="flex:1">Bust</button>
       <input type="number" inputmode="numeric" placeholder="or type score" id="manual" value="${manual ? E.manual : ''}" style="flex:1.3">
     </div>
-    <button class="wipe ${E.wipe ? 'on' : ''}" data-wipe style="width:100%;margin-top:8px">${E.wipe ? 'Total will be wiped to 0 (tap to cancel)' : BOARD ? 'Zero their total' : 'Zero my total'}</button>
+    ${zeroSaved
+      ? '<button class="saved" data-wipe disabled style="width:100%;margin-top:8px">Flip 7 beats The Zero: your total is safe</button>'
+      : `<button class="wipe ${E.wipe ? 'on' : ''}" data-wipe style="width:100%;margin-top:8px">${E.wipe ? 'Total will be wiped to 0 (tap to cancel)' : BOARD ? 'Zero their total' : 'Zero my total'}</button>`}
     <div class="actions">
       <button data-clear>${S.draft[editing] ? 'Clear' : E.cards.length ? 'Start over' : 'Cancel'}</button>
       <button class="primary" data-save>Save ${score}</button>
