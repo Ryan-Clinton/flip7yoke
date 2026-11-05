@@ -3,125 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14213d">
-<title>Flip 7 Scores</title>
-<style>
-  :root {
-    --bg: #14213d; --panel: #1d2d50; --panel2: #263a66; --ink: #f6f1e7; --muted: #9fb0d0;
-    --accent: #ffcb47; --good: #3ddc97; --bad: #ff5d73; --line: #33497a;
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; padding-bottom: 96px; }
-  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; position: sticky; top: 0; background: var(--bg); z-index: 5; border-bottom: 1px solid var(--line); }
-  h1 { margin: 0; font-size: 24px; letter-spacing: .5px; flex: 1; }
-  h1 b { color: var(--accent); }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; }
-  .dot.on { background: var(--good); }
-  main { max-width: 640px; margin: 0 auto; padding: 12px 16px; }
-  button { font: inherit; color: inherit; border: 0; border-radius: 12px; background: var(--panel2); padding: 10px 14px; cursor: pointer; }
-  button:active { transform: scale(.97); }
-  button.primary { background: var(--accent); color: #1a1a1a; font-weight: 700; }
-  button.danger { background: var(--bad); color: #fff; }
-  button.ghost { background: transparent; color: var(--muted); padding: 6px 8px; }
-  input { font: inherit; color: var(--ink); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .card { background: var(--panel); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
-  .player { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center; cursor: pointer; }
-  .player .rank { color: var(--muted); font-weight: 700; text-align: center; }
-  .player.lead .rank { color: var(--accent); }
-  .player .name { font-weight: 600; font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .player .total { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; }
-  .player .sub { grid-column: 2 / 4; display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
-  .bar { grid-column: 1 / 4; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
-  .bar i { display: block; height: 100%; background: var(--accent); }
-  .pending { color: var(--accent); font-weight: 600; }
-  .bustTag { color: var(--bad); font-weight: 600; }
-  .footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--bg) 30%); }
-  .footer button { width: 100%; max-width: 608px; display: block; margin: 0 auto; padding: 16px; font-size: 18px; }
-  .banner { background: var(--accent); color: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 12px; text-align: center; font-weight: 700; font-size: 20px; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 22px 0 8px; }
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { padding: 8px 4px; text-align: center; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: 13px; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  td.ed { cursor: pointer; }
-  .scroll { overflow-x: auto; }
-  /* sheet */
-  .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
-  .sheet.open { display: flex; }
-  .sheet > div { background: var(--panel); width: 100%; max-width: 640px; border-radius: 20px 20px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 92vh; overflow-y: auto; }
-  .sheet h3 { margin: 0 0 4px; font-size: 20px; }
-  .big { font-size: 48px; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; margin: 4px 0; }
-  .big small { display: block; font-size: 13px; font-weight: 500; color: var(--muted); }
-  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 10px 0; }
-  .grid button { padding: 14px 0; font-size: 20px; font-weight: 700; background: var(--panel2); }
-  .grid button.on { background: var(--ink); color: var(--bg); }
-  .grid.mods button.on { background: var(--accent); color: #1a1a1a; }
-  .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 10px; }
-  .bust.on { background: var(--bad) !important; color: #fff !important; }
-  .actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 14px; }
-  .actions button { padding: 14px; }
-  #qr { background: #fff; padding: 10px; border-radius: 12px; width: fit-content; margin: 10px auto; }
-  #qr img { display: block; width: 200px; height: 200px; image-rendering: pixelated; }
-  .url { text-align: center; font-size: 20px; font-weight: 700; color: var(--accent); word-break: break-all; }
-  .muted { color: var(--muted); font-size: 14px; }
-  .plist .row { margin-bottom: 8px; }
-  .mode { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 4px 8px; border-radius: 8px; background: var(--panel2); color: var(--muted); }
-  .mode.vengeance { background: #6b2737; color: #ffd0d8; }
-  .mode.brutal { background: var(--bad); color: #fff; }
-  .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
-  .seg button.on { background: var(--accent); color: #1a1a1a; font-weight: 700; }
-  .grid button .c { display: block; font-size: 11px; font-weight: 600; }
-  .grid button.two { background: var(--accent); color: #1a1a1a; }
-  .wipe.on { background: var(--bad) !important; color: #fff !important; }
-  .hits { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .hits button.on { background: var(--bad); color: #fff; }
-  td.wiped { color: var(--bad); font-weight: 700; }
-  .neg { color: var(--bad); }
-  .done { color: var(--good); font-weight: 700; }
-  .hand { display: flex; flex-wrap: wrap; gap: 6px; min-height: 40px; align-items: center; margin: 6px 0; }
-  .chip { padding: 6px 10px; font-size: 18px; font-weight: 700; background: var(--ink); color: var(--bg); border-radius: 10px; }
-  .chip i { font-style: normal; font-size: 12px; margin-left: 6px; opacity: .5; }
-  .tagc { font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 8px; background: var(--accent); color: #1a1a1a; }
-  .tagc.good { background: var(--good); }
-  .note { text-align: center; color: var(--accent); font-weight: 600; margin: 2px 0 6px; }
-  .big.busted { color: var(--bad); }
-  .grid.dim { opacity: .35; }
-  .grid.specials { grid-template-columns: 1fr 1fr; margin-top: 0; }
-  .grid.specials button { font-size: 16px; }
-  button:disabled { opacity: .4; }
-  button.saved:disabled { opacity: 1; background: var(--good); color: #1a1a1a; font-weight: 700; }
-  .snap { display: block; text-align: center; padding: 14px; margin: 6px 0 2px; border-radius: 12px; background: var(--panel2); border: 1px dashed var(--muted); font-weight: 700; font-size: 18px; cursor: pointer; }
-  .snap.busy { opacity: .6; border-style: solid; }
-  /* phone view */
-  .me { text-align: center; }
-  .me .total { font-size: 64px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-  .bigbtn { width: 100%; padding: 22px; font-size: 22px; margin-top: 4px; }
-  .stand { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
-  .stand:last-child { border: 0; }
-  .stand.you { color: var(--accent); font-weight: 700; }
-  .who { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-  /* board view (computer screen) */
-  body.board main { max-width: 1400px; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
-  body.board .player .name { font-size: 30px; }
-  body.board .player .total { font-size: 48px; }
-  body.board .player .sub { font-size: 18px; }
-  body.board .player .rank { font-size: 22px; }
-  body.board .bar { height: 10px; }
-  body.board .footer button { max-width: 900px; }
-  .joinPanel { position: sticky; top: 76px; text-align: center; }
-  .joinPanel .qrbox { background: #fff; padding: 10px; border-radius: 12px; width: fit-content; margin: 8px auto; }
-  .joinPanel .qrbox img { display: block; width: 190px; height: 190px; image-rendering: pixelated; }
-  .joinPanel .step { margin-top: 14px; font-weight: 700; font-size: 17px; text-align: left; }
-  .joinPanel .num { display: inline-block; width: 26px; height: 26px; line-height: 26px; border-radius: 50%; background: var(--accent); color: #1a1a1a; text-align: center; margin-right: 6px; }
-  .joinPanel .wifiText { font-size: 16px; line-height: 1.5; }
-  .joinPanel .wifiText b { color: var(--accent); font-size: 18px; }
-  .finishing { background: var(--good); color: #1a1a1a; border-radius: 16px; padding: 14px; margin-bottom: 12px; text-align: center; font-weight: 700; font-size: 20px; }
-  @media (max-width: 800px) { body.board main { grid-template-columns: 1fr; } .joinPanel { position: static; } }
-</style>
+<meta name="theme-color" content="#132A74">
+<title>Flip7yoke</title>
+<link rel="preload" href="/fonts/bigshoulders-inline-800.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header>
-  <h1>Flip <b>7</b></h1>
+  <h1><span class="wordmark">Flip<span class="seven">7</span>yoke</span><span class="night">Thursday game night</span></h1>
   <span class="mode" id="modeTag" hidden></span>
   <span class="dot" id="conn" title="Live connection"></span>
   <button id="shareBtn">Join</button>
@@ -159,6 +48,9 @@ const mode = () => S.mode || 'classic';
 const veng = () => Rules.isVengeance(mode());
 const entryScore = e => Rules.entryScore(e, mode());
 const nameOf = id => (S.players.find(p => p.id === id) || {}).name || '?';
+// Each player gets a colour from the deck's numerals, in the order they joined.
+const DECK_COLOURS = ['#D9443A', '#2F8ED1', '#2BB0AC', '#8CC43F', '#E9B43C', '#B05FB0', '#8C6E5A'];
+const pcOf = id => DECK_COLOURS[Math.max(0, S.players.findIndex(p => p.id === id)) % DECK_COLOURS.length];
 
 const act = (type, args = {}) => fetch('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...args }) });
 const totals = () => Rules.totals(S);
@@ -224,8 +116,9 @@ function renderPhone() {
   const e = S.draft[me.id];
   const entered = Object.keys(S.draft).length;
   const left = S.target - tot[me.id];
-  let html = banner + `<div class="card me">
-      <div class="muted">${esc(me.name)} · ${ord(rank)} of ${S.players.length}</div>
+  let html = banner + `<div class="card me" style="--pc:${pcOf(me.id)}">
+      <div class="who-name">${esc(me.name)}</div>
+      <div class="muted">${ord(rank)} of ${S.players.length}</div>
       <div class="total ${tot[me.id] < 0 ? 'neg' : ''}">${tot[me.id]}</div>
       <div class="muted">${left > 0 ? left + ' to go' : 'Target reached'}</div></div>`;
   if (!over || e) {
@@ -238,7 +131,7 @@ function renderPhone() {
       <p class="muted" style="text-align:center;margin:10px 0 0">${S.finishing ? 'All scores in, finishing the round…' : `${entered} of ${S.players.length} scores in`}</p></div>`;
   }
   html += `<h2>Standings</h2><div class="card">${ranked.map((p, i) => `<div class="stand ${p.id === me.id ? 'you' : ''}">
-      <span>${i + 1}. ${esc(p.name)} ${S.draft[p.id] ? '<span class="done">✓</span>' : ''}</span><span class="${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</span></div>`).join('')}</div>
+      <span><i class="pc" style="background:${pcOf(p.id)}"></i>${i + 1}. ${esc(p.name)} ${S.draft[p.id] ? '<span class="done">✓</span>' : ''}</span><b class="${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</b></div>`).join('')}</div>
     <p class="muted" style="text-align:center">Not ${esc(me.name)}? <button class="ghost" id="notMe">Switch player</button></p>`;
   app.innerHTML = html;
   const mine = $('#mine');
@@ -265,14 +158,14 @@ function renderBoard() {
     const e = S.draft[p.id];
     const status = !e ? 'Waiting for score…' : `<span class="done">✓</span> ${entryStatus(e)}`;
     const left = Math.max(0, S.target - tot[p.id]);
-    return `<div class="card player ${tot[p.id] === best && best > 0 ? 'lead' : ''}" data-pid="${p.id}">
+    return `<div class="card player ${tot[p.id] === best && best > 0 ? 'lead' : ''}" data-pid="${p.id}" style="--pc:${pcOf(p.id)}">
       <div class="rank">${i + 1}</div><div class="name">${esc(p.name)}</div><div class="total ${tot[p.id] < 0 ? 'neg' : ''}">${tot[p.id]}</div>
       <div class="sub"><span>${status}</span><span>${left ? left + ' to go' : 'Target reached'}</span></div>
       <div class="bar"><i style="width:${Math.max(0, Math.min(100, tot[p.id] / S.target * 100))}%"></i></div></div>`;
   }).join('');
 
   if (S.rounds.length) {
-    html += `<h2>Rounds</h2><div class="card scroll"><table><tr><th>#</th>${S.players.map(p => `<th>${esc(p.name)}</th>`).join('')}<th></th></tr>`;
+    html += `<h2>Rounds</h2><div class="card scroll"><table><tr><th>#</th>${S.players.map(p => `<th>${esc(p.name)}<i style="background:${pcOf(p.id)}"></i></th>`).join('')}<th></th></tr>`;
     S.rounds.forEach((r, i) => {
       html += `<tr><td class="muted">${i + 1}</td>${S.players.map(p => (r.zero || []).includes(p.id)
         ? `<td class="ed wiped" data-r="${i}" data-p="${p.id}" data-v="${r.scores[p.id] ?? 0}" title="Total wiped to 0">⓪</td>`
@@ -472,6 +365,7 @@ function drawEntry() {
     <div class="hits"><button data-hit="" class="${!E.hit ? 'on' : ''}" style="background:${!E.hit ? 'var(--good)' : ''};color:${!E.hit ? '#1a1a1a' : ''}">+15 to me</button>
       ${others.map(o => `<button data-hit="${o.id}" class="${E.hit === o.id ? 'on' : ''}">−15 ${esc(o.name)}</button>`).join('')}</div>` : '';
 
+  $('#entryBody').style.setProperty('--pc', pcOf(p.id));
   $('#entryBody').innerHTML = `
     <h3>${esc(p.name)}</h3>
     <div class="big ${score < 0 ? 'neg' : ''} ${E.bust ? 'busted' : ''}">${score}<small>${caption}${Rules.wipes(E) ? ' · total wiped to 0' : ''}</small></div>

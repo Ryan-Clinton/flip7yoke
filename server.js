@@ -25,7 +25,17 @@ function save() {
 
 const Rules = require('./public/rules.js');
 // Scripts the page loads, all served from this machine so game night needs no internet.
-const SCRIPTS = { '/rules.js': 'rules.js', '/qrcode.min.js': 'qrcode.min.js' };
+// Exact allow-list (no path joining from the URL), plus the bundled fonts.
+const STATIC = {
+  '/rules.js': ['rules.js', 'text/javascript; charset=utf-8'],
+  '/qrcode.min.js': ['qrcode.min.js', 'text/javascript; charset=utf-8'],
+  '/style.css': ['style.css', 'text/css; charset=utf-8'],
+};
+try {
+  for (const f of fs.readdirSync(path.join(__dirname, 'public', 'fonts'))) {
+    if (f.endsWith('.woff2')) STATIC[`/fonts/${f}`] = [`fonts/${f}`, 'font/woff2'];
+  }
+} catch {}
 const MODES = ['classic', 'vengeance', 'brutal'];
 // Names shown under "Played before? Tap your name". Tapping one joins the game as that player.
 const REGULARS = ['Ryan', 'Gareth', 'Rossi', 'Chris', 'Carlo', 'Jarvis', 'Rita'];
@@ -314,10 +324,11 @@ http.createServer((req, res) => {
     });
     return;
   }
-  if (SCRIPTS[req.url]) {
-    return fs.readFile(path.join(__dirname, 'public', SCRIPTS[req.url]), (err, js) => {
-      res.writeHead(err ? 404 : 200, { 'Content-Type': 'text/javascript; charset=utf-8' });
-      res.end(err ? '' : js);
+  if (STATIC[req.url]) {
+    const [file, type] = STATIC[req.url];
+    return fs.readFile(path.join(__dirname, 'public', file), (err, body) => {
+      res.writeHead(err ? 404 : 200, { 'Content-Type': type, 'Cache-Control': type.startsWith('font/') ? 'max-age=604800' : 'no-cache' });
+      res.end(err ? '' : body);
     });
   }
   fs.readFile(INDEX, (err, html) => {
