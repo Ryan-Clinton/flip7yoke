@@ -196,7 +196,10 @@ function renderPhone() {
     app.innerHTML = `<div class="card"><h3 style="margin-top:0">What's your name?</h3>
       <form id="joinForm" class="row"><input placeholder="Your name" autocomplete="off" maxlength="20"><button class="primary">Join</button></form>
       ${S.players.length ? `<p class="muted" style="margin:14px 0 0">Already in the game? Tap your name:</p>
-      <div class="who">${S.players.map(p => `<button data-me="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}</div>`;
+      <div class="who">${S.players.map(p => `<button data-me="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}
+      ${(rest => rest.length ? `<p class="muted" style="margin:14px 0 0">Played before? Tap your name:</p>
+      <div class="who">${rest.map(n => `<button data-join="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : '')(
+        regulars.filter(n => !S.players.some(p => p.name.toLowerCase() === n.toLowerCase())))}</div>`;
     $('#joinForm').onsubmit = async ev => {
       ev.preventDefault();
       const name = ev.target.querySelector('input').value.trim();
@@ -205,6 +208,10 @@ function renderPhone() {
       if (r.ok) setMe((await r.json()).id);
     };
     app.querySelectorAll('[data-me]').forEach(el => el.onclick = () => setMe(el.dataset.me));
+    app.querySelectorAll('[data-join]').forEach(el => el.onclick = async () => {
+      const r = await act('addPlayer', { name: el.dataset.join });
+      if (r.ok) setMe((await r.json()).id);
+    });
     return;
   }
   const { tot, ranked, over, banner } = standings();
@@ -288,10 +295,11 @@ function renderBoard() {
 }
 
 // Join instructions stay on the board so people can scan whenever they sit down.
-let joinUrls = null;
+let joinUrls = null, regulars = [];
 fetch('/api/info').then(r => r.json()).then(i => {
   const lan = i.urls.filter(u => /\/\/(192\.168|10\.)/.test(u));
   joinUrls = lan.length ? lan : i.urls;
+  regulars = i.names || [];
   render();
 }).catch(() => {});
 function joinPanel() {

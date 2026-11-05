@@ -27,6 +27,8 @@ const Rules = require('./public/rules.js');
 // Scripts the page loads, all served from this machine so game night needs no internet.
 const SCRIPTS = { '/rules.js': 'rules.js', '/qrcode.min.js': 'qrcode.min.js' };
 const MODES = ['classic', 'vengeance', 'brutal'];
+// Names shown under "Played before? Tap your name". Tapping one joins the game as that player.
+const REGULARS = ['Ryan', 'Gareth', 'Rossi', 'Chris', 'Carlo', 'Jarvis', 'Rita'];
 
 // Rebuild an entry from known fields only, so stored state is always plain numbers and booleans.
 function cleanEntry(e) {
@@ -234,7 +236,7 @@ http.createServer((req, res) => {
   }
   if (req.url === '/api/info') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ urls: lanUrls() }));
+    return res.end(JSON.stringify({ urls: lanUrls(), names: REGULARS }));
   }
   if (req.url === '/api/action' && req.method === 'POST') {
     // A JSON content type forces a CORS preflight, which this server never approves, so other sites can't post here.
