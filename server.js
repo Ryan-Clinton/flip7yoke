@@ -127,7 +127,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3-vl:4b-instruct' // ~2s p
 // and telling the model "0 to 12" made it (and our filter) drop real 13s.
 const CARD_GUIDE = `The cards may come from the original Flip 7 deck or from Flip 7 With a Vengeance.
 Number cards show one big number from 0 to 13. The 0 card may say "The Zero".
-Special number cards: "Lucky 13" (a 13 with a lucky label) and "Unlucky 7" (a 7 with an unlucky label).
+A "Lucky 13" is just a number card worth 13, and an "Unlucky 7" is just a number card worth 7.
 Modifier cards show +2, +4, +6, +8, +10, x2, -2, -4, -6, -8, -10 or ÷2 (divide by two).
 Action cards: "Freeze", "Flip Three", "Second Chance", "Just One More", "Flip Four", "Discard", "Steal", "Swap".`;
 
@@ -149,9 +149,8 @@ const SCAN_SCHEMA = {
   properties: {
     numbers: { type: 'array', items: { type: 'integer' }, description: 'value of every number card, one entry per card, repeats included' },
     modifiers: { type: 'array', items: { type: 'string' }, description: 'each modifier card exactly as printed, e.g. "+4", "-6", "x2", "÷2"' },
-    specials: { type: 'array', items: { type: 'string', enum: ['lucky13', 'unlucky7', 'second_chance'] } },
   },
-  required: ['numbers', 'modifiers', 'specials'],
+  required: ['numbers', 'modifiers'],
 };
 
 function ollamaChat(body) {
@@ -212,11 +211,10 @@ Read the big number in the middle or corner of each card. Do not guess cards you
     // Only count modifiers that belong to the deck the rules are set to: +N in Classic, -N in Vengeance.
     if ([2, 4, 6, 8, 10].includes(v) && minus === V && !hand.mods.includes(v)) hand.mods.push(v);
   }
-  const sp = got.specials || [];
-  if (sp.includes('lucky13') || sp.includes('unlucky7')) vengeanceCards = true;
-  if (V && sp.includes('lucky13')) { hand.lucky = true; if (!hand.cards.includes(13)) hand.cards.push(13); }
-  if (V && sp.includes('unlucky7')) { hand.unlucky = true; if (!hand.cards.includes(7)) hand.cards.push(7); }
-  if (!V && sp.includes('second_chance')) hand.chance = true;
+  // Special cards don't change a finished hand's score, with one exception: two 13s on the table
+  // means one must be the Lucky 13 (otherwise the player would have busted).
+  // Unlucky 7 has already discarded everything else by the time of the photo and scores as a plain 7.
+  if (V && hand.cards.filter(n => n === 13).length === 2) hand.lucky = true;
   if (!V && vengeanceCards) hand.deckHint = 'vengeance';
   keepScan(imageB64, got, hand);
   return hand;
