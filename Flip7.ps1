@@ -150,8 +150,15 @@ function Stop-Flip {
     }
     Remove-Item $PidFile -ErrorAction SilentlyContinue
   }
-  # Free the GPU: unload the model whoever runs Ollama, then stop Ollama only if we started it.
-  Post-Json "$ReaderUrl/api/generate" ('{"model":"' + $ReaderModel + '","keep_alive":0}') | Out-Null
+  # Free the GPU: if the card reader is on and our model is loaded, unload just that model (other models, and an
+  # Ollama started by something else, are left running; ours reloads on its next use). Then stop Ollama only if
+  # we started it.
+  if ($Cfg.cardReader.enabled -ne $false) {
+    $loaded = Get-Json "$ReaderUrl/api/ps" 1500
+    if ($loaded -and @($loaded.models | Where-Object { $_.name -eq $ReaderModel -or $_.model -eq $ReaderModel }).Count) {
+      Post-Json "$ReaderUrl/api/generate" ('{"model":"' + $ReaderModel + '","keep_alive":0}') | Out-Null
+    }
+  }
   $ours = Get-OurOllama
   if ($ours) { Stop-Process -Id $ours.Id -Force -ErrorAction SilentlyContinue; Remove-Item $OllamaPidFile -ErrorAction SilentlyContinue }
   return $result
@@ -283,11 +290,15 @@ $FirewallText = @{
 switch ($Action) {
   'start'  { $p = Get-InstallProblem; if ($p) { $p; exit 1 }; Start-Flip; return }
   'stop'   {
-    # Exit code 3 if anything recorded is still running afterwards (the installer won't replace files then).
+    # Exit codes, which the installer relies on before it replaces any files:
+    #   0  stopped cleanly with every save confirmed, or nothing was running
+    #   2  stopped, but the last save wasn't confirmed (it failed, or the server had to be ended)
+    #   3  something recorded is still running
     $r = Get-FlipServer
     $msg = Stop-Flip
     if ($msg) { $msg } else { 'Stopped.' }
     if ($r -and ((Test-Recorded $r.supervisorPid $r.exe $r.supervisorStart) -or (Test-Recorded $r.childPid $r.exe $r.childStart))) { exit 3 }
+    if ($msg) { exit 2 }
     exit 0
   }
   'status' {

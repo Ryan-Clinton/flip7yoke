@@ -1,6 +1,6 @@
 # Flip7yoke installer: spec
 
-Status: **Stages 1 to 4 built** (5 and 6 Nov 2026). Stage 5 (README, clean-PC checks, release) is still a plan, and nothing is public. Written 5 Nov 2026; revised after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`), then where building Stages 1 to 3 showed a better or necessary way (each marked **As built**).
+Status: **Stages 1 to 4 built** (5 and 6 Nov 2026), with the audit round 4 corrections. In Stage 5 the README and screenshots are done. Still to do: the clean-PC checks (see "Not checked yet") and the release. Nothing is public. Written 5 Nov 2026; revised after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`), then where building Stages 1 to 3 showed a better or necessary way (each marked **As built**).
 
 ## What's built (Stages 1 to 3)
 
@@ -155,7 +155,7 @@ Replaces `.env` and the hard-coded values.
 
 | Setting | Takes effect |
 |---|---|
-| `players`, `subtitle`, `wifi` | Live: the server re-reads `config.json` when it changes (`fs.watchFile` polling) |
+| `players`, `subtitle`, `wifi` | Live: the server re-reads `config.json` when it changes (`fs.watchFile` polling). **As built (audit round 4):** every update on `/events` carries a `configVersion` that goes up on each reload. Open pages fetch `/api/info` again when it changes, so names, subtitle, Wi-Fi and the join address update on a board that's already open. Checked in Chrome |
 | `cardReader.enabled` | Live: switching it on runs a readiness check, switching it off hides the camera |
 | `cardReader.model`, `cardReader.url`, `network.address`, `ports` | On the next Start. The Settings panel says "Restart to apply" and offers a Restart button |
 
@@ -245,7 +245,9 @@ A host PIN for destructive actions is an open question for Ryan (see the end).
 
   Every action ends with `POST /api/reader/check`, which runs the full check now.
 - **Open data folder** button for the data folder (`%LOCALAPPDATA%\Flip7yoke` installed, the project folder from the repo).
-- **Ollama for Windows:** Start uses an Ollama that's already answering (the tray app usually starts one). It only starts `ollama serve` itself if none is, and records that PID in `logs\ollama.pid`. Stop unloads the model (`keep_alive: 0`) to free the GPU, and stops only an Ollama it started.
+- **Ollama for Windows:** Start uses an Ollama that's already answering (the tray app usually starts one). It only starts `ollama serve` itself if none is, and records that PID in `logs\ollama.pid`. Stop stops only an Ollama it started.
+  - Stop also frees the GPU: if the card reader is on and our model is loaded (`/api/ps`), it unloads just that model (`keep_alive: 0`).
+  - **Accepted in audit round 4:** this happens even when something else started that Ollama. Only our model is unloaded, other models and the Ollama process are left alone, and ours reloads on its next use.
 - **As built:** `Flip7.ps1 -Action snapshot -Out <folder>` draws the window and Settings to PNGs without showing them on screen, for README screenshots and checks.
 
 ## Stage 3: package the server
@@ -320,7 +322,10 @@ The control window is a remote control, not a babysitter. Closing it leaves the 
 - **Port taken:** if the main port is taken, the server exits with a clear message, and the control window shows it with a pointer to the Ports setting. If port 80 is taken, the server carries on with 7777, as now.
   - **As built:** the server exits with code 2 when it can't start (port taken, data folder not writable). The supervisor treats that as final rather than a crash, writes the message to `server.error.txt` in the data folder, and exits. The control window shows "Last start failed: <message>". A good start deletes the file.
   - The control window also names another program on the port before Start is pressed. It does this when the port answers without our token.
-- **Second copy (as built):** a supervisor that finds a `server.pid.json` whose control port answers `/ping` with that record's token exits at once ("already running"), so even a double-click on the exe can't start two.
+- **Second copy (revised after audit round 4):** a supervisor claims the instance before starting anything, by creating `server.pid.json` exclusively (`wx`). Of two started at the same moment only one can, and the other exits ("already running").
+  - An existing record means "running" if its control port answers `/ping` with its token, or if its supervisor is alive and started under 15 seconds ago (it may not be listening yet). Otherwise the record is stale: it's removed and the claim is retried.
+  - A supervisor only deletes the record if it still holds its own token. The first version let a losing second copy delete the winner's record, so the control window lost track of a running server. `tests/lifecycle.test.js` now covers this.
+  - Replacing the record retries for about 2 seconds when Windows refuses because another process has it open (the control window reads it every 2 seconds). It never crashes the supervisor: testing caught one doing exactly that under load.
 - **Logs (as built):** the supervisor writes its own and the server's output to `logs\server.log` in the data folder. It moves it to `server.old.log` once it passes 5 MB.
 - **Development:** from the repo, `run.js` (which loads `main.js`) is the supervisor. It writes the same `server.pid.json`, uses the same IPC stop and control channel, and keeps its file-watching restarts. A watch restart is a supervisor-initiated stop then start, not a crash. The control window works the same way in both setups, and the command-line matching in `Get-FlipProcs` is gone.
 
@@ -395,7 +400,16 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
   - With no `rcedit`, the prompt calls the program "Node.js JavaScript Runtime".
   - The rule it makes can cover Public networks too, if both boxes are ticked.
   - Uninstall removes only our own "Flip7yoke" rule (`-Action remove-firewall`, one UAC prompt only if that rule exists). Rules Windows made from its prompt are left alone.
-- **Upgrades:** `PrepareToInstall` runs the installed `Flip7yoke.ps1 -Action stop`, which exits with 3 if anything recorded is still running. In that case the installer stops with "Nothing was changed".
+- **Upgrades (revised after audit round 4):** `PrepareToInstall` runs the installed `Flip7yoke.ps1 -Action stop`, and only a verified clean stop lets files be replaced. The stop action exits with:
+
+  | Code | Meaning | Installer |
+  |---|---|---|
+  | 0 | Stopped cleanly with every save confirmed, or nothing was running | Goes ahead |
+  | 2 | Stopped, but the last save wasn't confirmed (it failed, or the server had to be ended) | Asks, default **No**. A silent install takes No and stops |
+  | 3 | Something recorded is still running | Stops |
+  | anything else, or PowerShell couldn't be started | Not verified | Stops |
+
+  Each stop leaves "Nothing was changed". Uninstall uses the same check. Tested: with saving broken mid-game, a silent upgrade refused (setup exit code 7) and left the installed files untouched.
 - **Uninstall:**
   - `InitializeUninstall` stops the server the same way.
   - `[UninstallDelete]` removes the program folder if it's left empty.
@@ -453,7 +467,9 @@ Run on a Windows 11 VM with no Node or Ollama, unless a line says otherwise.
 ### Release
 
 - Version number in one place (`package.json` `version`, now 0.9.0), used by the build (`--version`), the control window stamp and the installer.
-- `README.md` with screenshots (board, phone, scoring sheet), install steps and build notes.
+- `README.md` with screenshots (board, phone, scoring sheet), install steps and build notes. **Done:**
+  - The screenshots are in `docs/images/`, made from a demo game with invented names and Wi-Fi details.
+  - It covers Windows' own firewall rules that uninstall leaves, how to check the SHA-256, privacy of card photos, who can change the game, and troubleshooting.
   - **Unsigned installer:** the first release is unsigned, so Windows SmartScreen shows "Windows protected your PC". The README says why, says to download only from the project's GitHub Releases page, and lists the file's SHA-256 so people can check it's the real one. Only then does it say that **More info**, then **Run anyway**, proceeds. It doesn't present warnings in general as something to click past.
 - `LICENSE` (MIT), plus OFL for Big Shoulders and Barlow and MIT for qrcode-generator 1.4.4.
 - Disclaimer on the board footer, the README and the installer's first page: "Unofficial score keeper for Flip 7. Not affiliated with The Op." Our own design, with no card art from the published game.

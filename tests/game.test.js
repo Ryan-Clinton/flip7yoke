@@ -277,9 +277,12 @@ test('server: names, subtitle and Wi-Fi come from config.json and change live; W
     assert.strictEqual(i.subtitle, 'Friday');
     assert.strictEqual(i.wifi, null);
     assert.strictEqual(i.reader, 'off');
+    const before = (await getState(g.url)).configVersion;
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Carlo', 'Jarvis'], wifi: { ssid: 'Home', password: 'p;w' } }));
     for (let n = 0; n < 40 && i.names.length < 2; n++) { await wait(100); i = await (await fetch(g.url + '/api/info')).json(); }
     assert.deepStrictEqual(i.names, ['Carlo', 'Jarvis']);
+    // open pages are told: the version in every update goes up, so they fetch /api/info again
+    assert.ok((await getState(g.url)).configVersion > before);
     assert.strictEqual(i.wifi.qr, String.raw`WIFI:T:WPA;S:Home;P:p\;w;;`);
   } finally { await g.stop(); }
 });

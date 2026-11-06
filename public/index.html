@@ -67,7 +67,9 @@ function connect() {
   es.onerror = () => $('#conn').classList.remove('on');
   es.onmessage = ev => {
     const was = S && S.reader;
+    const cfgWas = S && S.configVersion;
     S = JSON.parse(ev.data);
+    if (cfgWas && S.configVersion !== cfgWas) loadInfo(); // settings changed on the computer
     render();
     // the camera button comes and goes with the card reader, even while someone has their hand open
     if (was !== S.reader && editing && $('#entrySheet').classList.contains('open')) drawEntry();
@@ -208,15 +210,19 @@ function renderBoard() {
 
 // Join instructions stay on the board so people can scan whenever they sit down.
 // The server picks the address on the home network (joinUrl); urls is the fallback when it found none.
+// Fetched at start and again whenever the settings change (see connect()).
 let joinUrls = null, regulars = [], wifi = null;
-fetch('/api/info').then(r => r.json()).then(i => {
-  joinUrls = i.joinUrl ? [i.joinUrl] : i.urls;
-  regulars = i.names || [];
-  wifi = i.wifi || null;
-  $('#subtitle').textContent = i.subtitle || '';
-  $('#subtitle').hidden = !i.subtitle;
-  render();
-}).catch(() => {});
+function loadInfo() {
+  fetch('/api/info').then(r => r.json()).then(i => {
+    joinUrls = i.joinUrl ? [i.joinUrl] : i.urls;
+    regulars = i.names || [];
+    wifi = i.wifi || null;
+    $('#subtitle').textContent = i.subtitle || '';
+    $('#subtitle').hidden = !i.subtitle;
+    render();
+  }).catch(() => {});
+}
+loadInfo();
 function joinPanel() {
   const wifiStep = wifi ? `<div class="step"><span class="num">1</span> Join the Wi-Fi</div>
     <div id="wifiQr" class="qrbox"></div>

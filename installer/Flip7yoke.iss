@@ -80,34 +80,51 @@ Type: dirifempty; Name: "{app}"
 Filename: "{#PS}"; Parameters: "{#PSArgs} -Action remove-firewall"; RunOnceId: "RemoveFirewallRule"; Flags: runhidden waituntilterminated
 
 [Code]
-// Stop a running Flip7yoke through its supervisor, so the current game is saved first.
-// Returns False if it is still running afterwards (Flip7yoke.ps1 -Action stop exits with 3).
-function StopFlip7yoke(): Boolean;
+// Stop a running Flip7yoke through its supervisor, so the current game is saved first. Only a verified clean
+// stop lets files be replaced or removed. Returns '' to go ahead, or the reason not to.
+// Flip7yoke.ps1 -Action stop exits with 0 (clean, or nothing running), 2 (stopped but the last save wasn't
+// confirmed) or 3 (still running). Anything else, or PowerShell not starting at all, counts as not verified.
+function StopFlip7yoke(Doing: String): String;
 var
   Script: String;
   Code: Integer;
 begin
-  Result := True;
+  Result := '';
   Script := ExpandConstant('{app}\Flip7yoke.ps1');
-  if not FileExists(Script) then Exit;
-  if Exec(ExpandConstant('{#PS}'), '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + Script + '" -Action stop',
-          '', SW_HIDE, ewWaitUntilTerminated, Code) then
-    Result := (Code <> 3);
+  if not FileExists(Script) then Exit; // nothing installed yet
+  if not Exec(ExpandConstant('{#PS}'), '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + Script + '" -Action stop',
+              '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    Result := 'Setup could not run PowerShell to stop Flip7yoke (' + SysErrorMessage(Code) + '). Press Stop in the Flip7yoke window, then try again. Nothing was changed.';
+    Exit;
+  end;
+  case Code of
+    0: Result := '';
+    2: // Stopped, but its last save wasn't confirmed. Ask; a silent install takes the default, No.
+      if SuppressibleMsgBox('Flip7yoke has stopped, but it could not confirm that the last scores were saved.' + #13#10 + #13#10 +
+                            'The details are in ' + ExpandConstant('{localappdata}\Flip7yoke\logs\server.log') + '.' + #13#10 + #13#10 +
+                            'Carry on with ' + Doing + ' anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) <> IDYES then
+        Result := 'Setup stopped, because the last scores may not have been saved (see the log above). Nothing was changed.';
+    3: Result := 'Flip7yoke is still running and could not be stopped. Press Stop in the Flip7yoke window and try again. Nothing was changed.';
+  else
+    Result := 'Flip7yoke could not be stopped cleanly (code ' + IntToStr(Code) + '). Press Stop in the Flip7yoke window and try again. Nothing was changed.';
+  end;
 end;
 
-// Upgrades: stop the old version before replacing its files. If it won't stop, change nothing.
+// Upgrades: stop the old version before replacing its files. If that isn't verified, change nothing.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := '';
-  if not StopFlip7yoke() then
-    Result := 'Flip7yoke is still running and could not be stopped. Close it (press Stop in the Flip7yoke window) and run Setup again. Nothing was changed.';
+  Result := StopFlip7yoke('the upgrade');
 end;
 
 function InitializeUninstall(): Boolean;
+var
+  Why: String;
 begin
-  Result := StopFlip7yoke();
+  Why := StopFlip7yoke('uninstalling');
+  Result := (Why = '');
   if not Result then
-    MsgBox('Flip7yoke is still running and could not be stopped. Press Stop in the Flip7yoke window, then uninstall again.', mbError, MB_OK);
+    SuppressibleMsgBox(Why, mbError, MB_OK, IDOK);
 end;
 
 // After the program is removed: offer to delete the scores and settings too. The default is to keep them.

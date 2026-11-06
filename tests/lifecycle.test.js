@@ -107,6 +107,27 @@ test('stop then start straight away: one server, no restart race', async () => {
   }
 });
 
+test('two copies started at the same moment: one runs, the other exits, and the record stays correct', async () => {
+  const dir = tmpDir(), port = await freePort(), url = `http://127.0.0.1:${port}`;
+  const a = launch(dir, port), b = launch(dir, port);
+  try {
+    const loser = await Promise.race([a.exited.then(() => a), b.exited.then(() => b), wait(15000).then(() => null)]);
+    assert.ok(loser, 'one copy exits');
+    const winner = loser === a ? b : a;
+    assert.strictEqual(await loser.exited, 0, 'the second copy exits quietly ("already running")');
+    await wait(3000); // longer than a crash restart, in case the loser had broken anything
+    const rec = record(dir);
+    assert.ok(rec, 'server.pid.json is still there');
+    assert.strictEqual(rec.supervisorPid, winner.pid);
+    assert.ok(alive(winner.pid));
+    assert.strictEqual((await status(url)).token, rec.token);
+  } finally {
+    const r = record(dir);
+    if (r) await stop(r).catch(() => {});
+    await Promise.all([a.exited, b.exited]);
+  }
+});
+
 test('port taken by another program: the supervisor gives up with a message, no restart loop', async () => {
   const dir = tmpDir(), port = await freePort();
   const squatter = net.createServer().listen(port, '0.0.0.0');

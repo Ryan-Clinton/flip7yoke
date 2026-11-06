@@ -56,7 +56,7 @@ async function start(options = {}) {
   const dataDir = options.dataDir || paths.dataDir();
   paths.checkDataDir(dataDir); // throws "Can't write to <folder>: <reason>"
 
-  const cfg = options.config === false ? null : openConfig(dataDir, { log, onChange: () => applyConfig() });
+  const cfg = options.config === false ? null : openConfig(dataDir, { log, onChange: () => { configVersion++; applyConfig(); } });
   const C = () => (cfg ? cfg.config : require('./lib/config.js').DEFAULTS);
   const startCfg = JSON.parse(JSON.stringify(C()));
   const pick = (opt, envVal, conv, cfgVal) => (opt !== undefined ? opt : envVal !== undefined ? conv(envVal) : cfgVal);
@@ -86,8 +86,10 @@ async function start(options = {}) {
   const reader = createReader({ url: o.ollamaUrl, model: o.ollamaModel, scansDir: o.scansDir, log, onChange: () => broadcast() });
   const clients = new Set();
   const saveError = () => saveErrors.state || saveErrors.history || null;
-  // What every page needs besides the game itself, sent with each update.
-  const extras = () => ({ saveError: saveError(), reader: reader.state });
+  // What every page needs besides the game itself, sent with each update. configVersion goes up whenever
+  // config.json is reloaded, so open pages fetch /api/info again (names, subtitle, Wi-Fi) without a reload.
+  let configVersion = 1;
+  const extras = () => ({ saveError: saveError(), reader: reader.state, configVersion });
 
   function broadcast() {
     const msg = `data: ${JSON.stringify({ ...state, ...extras() })}\n\n`;
