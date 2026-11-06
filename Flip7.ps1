@@ -228,12 +228,13 @@ function Get-NetworkCategory($url) {
   if ($p) { return [string]$p.NetworkCategory } else { return $null }
 }
 
-# The firewall state shown to the user, for the kind of network phones would come in on. On a Public network with
-# only the Private rule (Setup's), it's 'public': the fix is making the network Private, not another rule.
+# The firewall state shown to the user, for the kind of network phones would come in on. On a Public network that
+# isn't allowed, but with Setup's Private rule in place, it's 'public': the fix is making the network Private, not
+# another rule. That includes a Block rule for Public, which Windows adds when its "Allow access?" prompt is cancelled.
 function Get-PhoneAccess($url) {
   if ((Get-NetworkCategory $url) -ne 'Public') { return (Test-Firewall) }
   $fw = Test-Firewall 'Public'
-  if ($fw -eq 'missing' -and (Test-Firewall) -eq 'ok') { return 'public' }
+  if ($fw -ne 'ok' -and (Test-Firewall) -eq 'ok') { return 'public' }
   return $fw
 }
 
