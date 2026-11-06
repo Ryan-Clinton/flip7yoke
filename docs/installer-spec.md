@@ -440,13 +440,13 @@ On a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-
 
 | # | Do | Expect | Result |
 |---|---|---|---|
-| 1 | Run Setup, leave the defaults, say **Yes** to the Windows Command Processor prompt | Installs without asking for an admin password; desktop and Start menu shortcuts; finish page with "Launch Flip7yoke" ticked | |
+| 1 | Run Setup, leave the defaults, approve the Windows Command Processor prompt (the firewall rule) | The program installs without admin rights. Only the firewall step asks for elevation: Yes on an admin account, an administrator's password on a standard account. Desktop and Start menu shortcuts; finish page with "Launch Flip7yoke" ticked. If possible, also try this on a standard account | |
 | 2 | Finish with Launch ticked | The Flip7yoke window opens; card reader says Ollama isn't installed | |
 | 3 | Press Start | Board opens in the browser; "Firewall: ok" (no "Phones may be blocked") | |
 | 4 | Scan the board's QR with a phone on the same Wi-Fi, join, score a round | Works; no camera button on the phone | |
 | 5 | Settings: add names, a subtitle, Wi-Fi (try **Detect** and **From Windows**), Save | The board updates without reloading; Wi-Fi QR appears | |
 | 6 | Uninstall from Windows Settings, answer **No** to deleting scores | Program and shortcuts gone; `%LOCALAPPDATA%\Flip7yoke` still there | |
-| 7 | Install again, but say **No** to the Windows prompt | Install still completes; window shows "Phones may be blocked" with **Allow phones**; pressing it and saying Yes fixes it | |
+| 7 | Install again, but decline the Windows prompt (No, or cancel the password box) | Install still completes; window shows "Phones may be blocked" with **Allow phones**; pressing it and approving fixes it | |
 | 8 | Card reader: press **Install Ollama** (needs about 4 GB and time) | A console installs Ollama and downloads the model; the camera button appears on phones without a restart | |
 | 9 | Run the same Setup again while a game is running | Game saved and still there after Start | |
 | 10 | Uninstall, answer **Yes** to deleting scores | `%LOCALAPPDATA%\Flip7yoke` gone; firewall rule gone (Windows Security > Firewall > Allowed apps); Ollama still installed | |

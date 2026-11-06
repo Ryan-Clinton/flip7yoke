@@ -20,9 +20,9 @@ You need a Windows 10 or 11 PC on the same Wi-Fi as the phones.
 
 1. Download `Flip7yoke-Setup-<version>.exe` from this project's [Releases page](https://github.com/Ryan-Clinton/flip7yoke/releases).
 2. Run it. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway** ([why](#about-the-windows-warning)).
-3. Click through Setup. Near the end Windows asks **"Do you want to allow this app to make changes to your device?"** for *Windows Command Processor*: that's Setup adding the firewall rule that lets phones connect. Say **Yes**.
+3. Click through Setup. Near the end Windows asks **"Do you want to allow this app to make changes to your device?"** for *Windows Command Processor*: that's Setup adding the firewall rule that lets phones connect. Say **Yes**. On a standard (non-admin) Windows account it asks for an administrator's password instead.
 
-That's it. Setup needs no admin password and installs just for you.
+That's it. Flip7yoke itself installs just for you, without admin rights; only that firewall step needs them.
 
 The three options on the way are:
 - **Desktop shortcut.**
