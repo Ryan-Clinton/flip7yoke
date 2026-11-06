@@ -33,7 +33,10 @@ spawn(SANDBOX, [wsb], { detached: true, stdio: 'ignore' }).unref();
 
 let shown = 0;
 const answered = new Set();
-const started = Date.now();
+// No time limit on the person's turns; it stops when the results are in or the sandbox is closed.
+const sandboxOpen = () => /WindowsSandbox(RemoteSession|Client)/i.test(
+  require('child_process').spawnSync('tasklist', ['/fo', 'csv', '/nh'], { encoding: 'utf8' }).stdout || '');
+let ticks = 0;
 const tick = async () => {
   const log = path.join(results, 'log.txt');
   if (fs.existsSync(log)) {
@@ -56,7 +59,8 @@ const tick = async () => {
     for (const r of [].concat(res)) console.log(`${r.ok === true ? 'PASS' : r.ok === false ? 'FAIL' : 'NOTE'}  ${r.step}: ${r.detail}`);
     process.exit(res.some(r => r.ok === false) ? 1 : 0);
   }
-  if (Date.now() - started > 3 * 60 * 60 * 1000) { console.log('Gave up after 3 hours.'); process.exit(1); }
+  // Checked every 30s after the first 2 minutes, which gives the sandbox time to open.
+  if (++ticks > 120 && ticks % 30 === 0 && !sandboxOpen()) { console.log('\nThe sandbox was closed before the test finished.'); process.exit(1); }
   setTimeout(tick, 1000);
 };
 tick();

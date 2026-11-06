@@ -456,7 +456,7 @@ Passed:
   - Making the network Private let the host in, and the window said ok.
 - **Defect found (B3):** before Start, the window said "Firewall: ok" on the Public network. The Public check went by the join address, and there isn't one until the server runs. It now falls back to the network the PC's internet route uses, and it also counts a Windows-made rule for Public networks.
 - **Unexplained (B4):** on the Public network the host reached the server, though only the Private rule was listed. The likely cause is that Windows' own "Allow access?" prompt was answered Allow. The next run lists every inbound rule for the exe to show this.
-- **Part C not done** within its 20 minutes, so uninstall wasn't tested. It now waits 60 minutes and reports a timeout as not tested rather than failed.
+- **Part C not done** within its 20 minutes, so uninstall wasn't tested. The time limits on the person's turns were a mistake and are gone: parts B and C wait however long they take, and the host side stops only when the results are in or the sandbox is closed.
 - **Needs run 4** to retest B3, B4 and part C.
 
 **Sandbox run 4 (6 Nov 2026, Public network again):**

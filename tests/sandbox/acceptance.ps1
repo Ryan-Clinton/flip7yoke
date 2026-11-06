@@ -145,10 +145,12 @@ Write-Host ' 3. Leave "Launch Flip7yoke" ticked and click Finish.'
 Write-Host ' 4. In the Flip7yoke window that opens, press Start. The board opens in the browser.'
 Write-Host '    If Windows asks "Allow access?" for Flip7yoke-server, click Cancel (the test checks Setup''s rule on its own).'
 Write-Host "    Leave everything open; this window carries on by itself.`n$bar" -ForegroundColor Yellow
-Say 'Waiting for part B (up to 20 minutes)'
-$installed = Wait-Until { if (Test-Path "$app\Flip7yoke-server.exe") { $true } } 1200
-Say "  installed: $([bool]$installed); now waiting for the Flip7yoke window (up to 5 minutes)"
-$windowUp = Wait-Until { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'Flip7yoke\.ps1' -and $_.CommandLine -notmatch '-Action' }).Count -gt 0 } 300
+# Parts B and C wait for the person however long they take: there's no time limit on their turns.
+$Forever = 10000000
+Say 'Waiting for part B (no time limit)'
+$installed = Wait-Until { if (Test-Path "$app\Flip7yoke-server.exe") { $true } } $Forever
+Say "  installed: $([bool]$installed); now waiting for the Flip7yoke window"
+$windowUp = Wait-Until { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'Flip7yoke\.ps1' -and $_.CommandLine -notmatch '-Action' }).Count -gt 0 } $Forever
 Check 'B1 normal install' ([bool]$installed -and (Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk'))) "installed $([bool]$installed); desktop shortcut $(Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk'))"
 Check 'B2 finish page launches the window' ([bool]$windowUp) "control window running $([bool]$windowUp)"
 $st = Invoke-Window 'status'
@@ -165,8 +167,8 @@ Check 'B3 firewall rule from Setup, and what the window says' ($rule -and (Firew
 $rules = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
   Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" })
 Note 'B3 all inbound rules for the exe' ($rules -join '; ')
-Say '  now waiting for Start to be pressed in the Flip7yoke window (up to 10 minutes)'
-$s = Wait-Until { Running } 600
+Say '  now waiting for Start to be pressed in the Flip7yoke window'
+$s = Wait-Until { Running } $Forever
 Check 'B4 Start from the window; history kept from part A' ($s -and @($s.players).Count -eq 2 -and $s.round -eq 2) "running $([bool]$s); players $(@($s.players) -join ', '); round $($s.round)"
 if ($s.joinUrl) { $h = Host-Check 'B4' $s.joinUrl; Note 'B4 reached from the host PC' "$($s.joinUrl): $(if ($h.reachable) { 'reachable' } else { "not reachable ($($h.error))" }); network: $(Network-Category)" }
 # Every inbound rule for the exe, whatever its name: Windows makes its own if someone answers its "Allow access?" prompt.
@@ -192,11 +194,9 @@ Write-Host '    (Leave Flip7yoke running: the uninstaller stops it.)'
 Write-Host ' 2. If Windows asks to let "Windows Command Processor" or "netsh" make changes, click Yes.'
 Write-Host ' 3. When it asks "Also delete your Flip7yoke score history and settings?", click Yes.'
 Write-Host "$bar" -ForegroundColor Yellow
-Say 'Waiting for part C (up to 60 minutes)'
-$gone = Wait-Until { if (-not (Test-Path "$app\Flip7yoke-server.exe")) { $true } } 3600
-if (-not $gone) {
-  Note 'C uninstall' 'not done within 60 minutes, so C1 to C3 were not tested'
-} else {
+Say 'Waiting for part C (no time limit)'
+$gone = Wait-Until { if (-not (Test-Path "$app\Flip7yoke-server.exe")) { $true } } $Forever
+if ($gone) {
   # The uninstaller removes the exe early; give it time to finish (the delete-data question comes at the end).
   $null = Wait-Until { if (-not (Test-Path $app)) { $true } } 300
   $null = Wait-Until { if (-not (Test-Path $data)) { $true } } 120
