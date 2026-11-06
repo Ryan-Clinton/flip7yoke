@@ -14,6 +14,8 @@ $setupSrc = Get-ChildItem $Dist -Filter 'Flip7yoke-Setup-*.exe' | Sort-Object La
 if ($PartAOnly) { $setup = $setupSrc.FullName } else {
   $setup = Join-Path ([Environment]::GetFolderPath('Desktop')) $setupSrc.Name # for part B, double-clicked by hand
   Copy-Item $setupSrc.FullName $setup -Force
+  # In case part C runs after this script stops waiting: double-click it to check the uninstall.
+  Copy-Item (Join-Path $PSScriptRoot 'check-uninstall.cmd') ([Environment]::GetFolderPath('Desktop')) -Force -ErrorAction SilentlyContinue
 }
 $app = Join-Path $env:LOCALAPPDATA 'Programs\Flip7yoke'
 $data = Join-Path $env:LOCALAPPDATA 'Flip7yoke'
