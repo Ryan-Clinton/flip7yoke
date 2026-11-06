@@ -127,6 +127,16 @@ begin
     SuppressibleMsgBox(Why, mbError, MB_OK, IDOK);
 end;
 
+// /DELETEDATA on the uninstaller's command line: delete them without asking (used by the automated test).
+function DeleteDataSwitch(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/DELETEDATA') = 0 then Result := True;
+end;
+
 // After the program is removed: offer to delete the scores and settings too. The default is to keep them.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
@@ -135,6 +145,7 @@ begin
   if CurUninstallStep <> usPostUninstall then Exit;
   Data := ExpandConstant('{localappdata}\Flip7yoke');
   if not DirExists(Data) then Exit;
+  if DeleteDataSwitch() then begin DelTree(Data, True, True, True); Exit; end;
   if UninstallSilent() then Exit;
   if MsgBox('Also delete your Flip7yoke score history and settings?' + #13#10 + #13#10 + Data + #13#10 + #13#10 +
             'Choose No to keep them for a later reinstall.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then

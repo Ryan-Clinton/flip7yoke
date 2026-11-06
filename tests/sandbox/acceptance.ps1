@@ -1,9 +1,9 @@
 # Clean-PC acceptance test, run inside Windows Sandbox by tools/sandbox-test.js (a clean Windows with no Node or
-# Ollama). Part A is automatic; parts B and C ask the person at the sandbox window to click through the normal
-# installer and uninstaller, and check what happened. Results go to C:\fy\results (a folder on the host).
-# Keep this file ASCII only (Windows PowerShell 5.1).
-# -PartAOnly -NoHost: the automatic part only, without asking the host anything. That's for a dry run of this
-# script on a developer PC (it installs into the current user's profile; uninstall and remove the data after).
+# Ollama). It's all automatic: nobody needs to click anything. The sandbox runs this script with admin rights, so
+# Setup's firewall step and the uninstaller's rule removal go through without Windows asking. Results go to
+# C:\fy\results (a folder on the host). Keep this file ASCII only (Windows PowerShell 5.1).
+# -PartAOnly -NoHost: part A only, without asking the host anything. That's for a dry run of this script on a
+# developer PC (it installs into the current user's profile; uninstall and remove the data after).
 param([string]$ResDir = 'C:\fy\results', [string]$Dist = 'C:\fy\dist', [switch]$PartAOnly, [switch]$NoHost)
 $ErrorActionPreference = 'Continue'
 # (PowerShell variable names ignore case, so the results folder is $ResDir, never $R: $r holds a step's result.)
@@ -11,12 +11,7 @@ New-Item -ItemType Directory -Force -Path $ResDir | Out-Null
 # Everything this window shows, errors included, also goes to the host.
 Start-Transcript -Path "$ResDir\transcript.txt" -Force | Out-Null
 $setupSrc = Get-ChildItem $Dist -Filter 'Flip7yoke-Setup-*.exe' | Sort-Object LastWriteTime | Select-Object -Last 1
-if ($PartAOnly) { $setup = $setupSrc.FullName } else {
-  $setup = Join-Path ([Environment]::GetFolderPath('Desktop')) $setupSrc.Name # for part B, double-clicked by hand
-  Copy-Item $setupSrc.FullName $setup -Force
-  # In case part C runs after this script stops waiting: double-click it to check the uninstall.
-  Copy-Item (Join-Path $PSScriptRoot 'check-uninstall.cmd') ([Environment]::GetFolderPath('Desktop')) -Force -ErrorAction SilentlyContinue
-}
+$setup = $setupSrc.FullName
 $app = Join-Path $env:LOCALAPPDATA 'Programs\Flip7yoke'
 $data = Join-Path $env:LOCALAPPDATA 'Flip7yoke'
 $ps1 = Join-Path $app 'Flip7yoke.ps1'
@@ -88,7 +83,7 @@ Check 'A1 silent install, no admin' ($p.ExitCode -eq 0 -and -not $files -and $un
 $v = & (Join-Path $app 'Flip7yoke-server.exe') --version
 Check 'A1 exe runs without Node' ($v -match '^\d+\.\d+\.\d+$') "Flip7yoke-server.exe --version = $v"
 
-Say 'Starting the score keeper (if Windows asks "Allow access?" for it, click Cancel, so part A tests the no-firewall case)'
+Say 'Starting the score keeper (Windows may show "Allow access?" for it: nobody answers it, so no rule is made)'
 $r = Invoke-Window 'start'
 $s = Wait-Until { Running } 30
 Check 'A2 Start' ([bool]$s) "start exit $($r.code); round $($s.round), join $($s.joinUrl)"
@@ -133,83 +128,76 @@ if ($PartAOnly) {
   return
 }
 
-# ---------------- Part B: the normal installer, clicked through ----------------
-$bar = '=' * 70
-Write-Host "`n$bar" -ForegroundColor Yellow
-Write-Host ' YOUR TURN (part B of 2)' -ForegroundColor Yellow
-Write-Host " 1. On this sandbox's desktop, double-click $($setupSrc.Name)."
-Write-Host '    (If Windows says "Windows protected your PC": More info, then Run anyway.)'
-Write-Host '    Keep the defaults and click through.'
-Write-Host ' 2. When Windows asks to let "Windows Command Processor" make changes, click Yes.'
-Write-Host ' 3. Leave "Launch Flip7yoke" ticked and click Finish.'
-Write-Host ' 4. In the Flip7yoke window that opens, press Start. The board opens in the browser.'
-Write-Host '    If Windows asks "Allow access?" for Flip7yoke-server, click Cancel (the test checks Setup''s rule on its own).'
-Write-Host "    Leave everything open; this window carries on by itself.`n$bar" -ForegroundColor Yellow
-# Parts B and C wait for the person however long they take: there's no time limit on their turns.
-$Forever = 10000000
-Say 'Waiting for part B (no time limit)'
-$installed = Wait-Until { if (Test-Path "$app\Flip7yoke-server.exe") { $true } } $Forever
-Say "  installed: $([bool]$installed); now waiting for the Flip7yoke window"
-$windowUp = Wait-Until { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'Flip7yoke\.ps1' -and $_.CommandLine -notmatch '-Action' }).Count -gt 0 } $Forever
-Check 'B1 normal install' ([bool]$installed -and (Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk'))) "installed $([bool]$installed); desktop shortcut $(Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk'))"
-Check 'B2 finish page launches the window' ([bool]$windowUp) "control window running $([bool]$windowUp)"
-$st = Invoke-Window 'status'
-$rule = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue | Where-Object { $_.Action -eq 'Allow' }).Count -gt 0
+# ---------------- Part B: install with the firewall and desktop options, as most people will ----------------
+$exe = "$app\Flip7yoke-server.exe"
+function Exe-Rules { return @(Get-NetFirewallApplicationFilter -Program $exe -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq 'Inbound' }) }
+function Rule-List { return ((Exe-Rules) | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" }) -join '; ' }
+function Reach($h) { if ($h.reachable) { 'reachable' } else { "not reachable ($($h.error))" } }
+
+# Setup's firewall step asks Windows for admin rights; this script already has them, so it goes through unasked.
+$p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS="desktopicon,firewall"', "/LOG=`"$ResDir\setup-B1.log`"" -Wait -PassThru
+$lnk = Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk')
+$rule = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue | Where-Object { $_.Action -eq 'Allow' -and [string]$_.Profile -eq 'Private' }).Count -gt 0
+Check 'B1 install with the desktop and firewall options' ($p.ExitCode -eq 0 -and $lnk -and $rule) "exit $($p.ExitCode); desktop shortcut $lnk; Private rule added $rule"
+Note 'B1 all inbound rules for the exe' (Rule-List)
+
+# The control window itself (what the finish page and the shortcuts open): it should come up and stay up.
+$gui = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ps1`"" -PassThru
+Start-Sleep 8
+Check 'B2 the Flip7yoke window opens' (-not $gui.HasExited) "window process running $(-not $gui.HasExited)"
+
 $public = (Network-Category) -match 'Public'
-# On a Public network the Private-only rule doesn't apply, and the window must say so rather than "ok", unless
-# Windows made its own Allow rule for Public networks (someone clicked Allow on its prompt), when "ok" is right.
-$publicAllow = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
-  Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' -and ([string]$_.Profile) -match 'Public|Any' }).Count -gt 0
-$blockAny = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
-  Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Action -eq 'Block' -and ([string]$_.Profile) -match 'Public|Any' }).Count -gt 0
-$expect = if ($public -and -not ($publicAllow -and -not $blockAny)) { 'Public' } else { 'ok' }
-Check 'B3 firewall rule from Setup, and what the window says' ($rule -and (Firewall-Line $st.out) -match $expect) "rule added $rule; $(Firewall-Line $st.out); network: $(Network-Category)"
-$rules = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
-  Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" })
-Note 'B3 all inbound rules for the exe' ($rules -join '; ')
-Say '  now waiting for Start to be pressed in the Flip7yoke window'
-$s = Wait-Until { Running } $Forever
-Check 'B4 Start from the window; history kept from part A' ($s -and @($s.players).Count -eq 2 -and $s.round -eq 2) "running $([bool]$s); players $(@($s.players) -join ', '); round $($s.round)"
-if ($s.joinUrl) { $h = Host-Check 'B4' $s.joinUrl; Note 'B4 reached from the host PC' "$($s.joinUrl): $(if ($h.reachable) { 'reachable' } else { "not reachable ($($h.error))" }); network: $(Network-Category)" }
-# Every inbound rule for the exe, whatever its name: Windows makes its own if someone answers its "Allow access?" prompt.
-$all = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
-  Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" })
-Note 'B4 all inbound rules for the exe' ($all -join '; ')
-# Make the network Private (as the window advises) and check the rule then lets the host, like a phone, in.
+Note 'B network' "$(Network-Category)"
+# Before Start, on a Public network with only Setup's Private rule, the window must say the network is Public.
+$st = Invoke-Window 'status'
+$expect = if ($public) { 'Public' } else { 'ok' }
+Check 'B3 firewall line before Start' ((Firewall-Line $st.out) -match $expect) "$(Firewall-Line $st.out) (expected '$expect')"
+
+if ($public) {
+  # Cancelling Windows' "Allow access?" prompt adds Block rules for Public networks. The advice must still be to
+  # make the network Private, since Setup's rule then applies.
+  New-NetFirewallRule -DisplayName 'flip7yoke-server.exe (test block)' -Direction Inbound -Action Block -Profile Public -Program $exe | Out-Null
+  $st = Invoke-Window 'status'
+  Check 'B3 firewall line with a Public block rule too' ((Firewall-Line $st.out) -match 'Public') "$(Firewall-Line $st.out); rules: $(Rule-List)"
+}
+
+$r = Invoke-Window 'start'
+$s = Wait-Until { Running } 30
+Check 'B4 Start; the game from part A is still there' ($s -and @($s.players).Count -eq 2 -and $s.round -eq 2) "start exit $($r.code); players $(@($s.players) -join ', '); round $($s.round)"
+$st = Invoke-Window 'status'
+Note 'B4 firewall line after Start' (Firewall-Line $st.out)
 if ($s.joinUrl -and $public) {
+  $h = Host-Check 'B4' $s.joinUrl
+  Check 'B4 on the Public network, the host is kept out' (-not $h.reachable) "$($s.joinUrl): $(Reach $h)"
+  # Make the network Private (as the window advises) and check the rule then lets the host, like a phone, in.
   try {
     Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction Stop
     Start-Sleep 3
     $st = Invoke-Window 'status'
     $h = Host-Check 'B5' $s.joinUrl
-    Check 'B5 on a Private network, the rule lets the host in' ($h.reachable -and (Firewall-Line $st.out) -match 'ok') "network now $(Network-Category); $(Firewall-Line $st.out); host: $(if ($h.reachable) { 'reachable' } else { "not reachable ($($h.error))" })"
-  } catch { Note 'B5 making the network Private' "couldn't (needs admin): $($_.Exception.Message)" }
+    Check 'B5 made Private: the rule lets the host in and the window says ok' ($h.reachable -and (Firewall-Line $st.out) -match 'ok') "network now $(Network-Category); $(Firewall-Line $st.out); host: $(Reach $h)"
+  } catch { Check 'B5 making the network Private' $false $_.Exception.Message }
+} elseif ($s.joinUrl) {
+  $h = Host-Check 'B4' $s.joinUrl
+  Check 'B4 on a Private network, the host gets in' ($h.reachable) "$($s.joinUrl): $(Reach $h)"
 }
+if (-not $gui.HasExited) { $gui.Kill() } # closing the window leaves the game running, as it does for people
 
-# ---------------- Part C: the normal uninstaller ----------------
-Write-Host "`n$bar" -ForegroundColor Yellow
-Write-Host ' YOUR TURN (part C of 2)' -ForegroundColor Yellow
-Write-Host ' 1. Start menu > Settings > Apps > Installed apps > Flip7yoke > ... > Uninstall.'
-Write-Host '    (Leave Flip7yoke running: the uninstaller stops it.)'
-Write-Host ' 2. If Windows asks to let "Windows Command Processor" or "netsh" make changes, click Yes.'
-Write-Host ' 3. When it asks "Also delete your Flip7yoke score history and settings?", click Yes.'
-Write-Host "$bar" -ForegroundColor Yellow
-Say 'Waiting for part C (no time limit)'
-$gone = Wait-Until { if (-not (Test-Path "$app\Flip7yoke-server.exe")) { $true } } $Forever
-if ($gone) {
-  # The uninstaller removes the exe early; give it time to finish (the delete-data question comes at the end).
-  $null = Wait-Until { if (-not (Test-Path $app)) { $true } } 300
-  $null = Wait-Until { if (-not (Test-Path $data)) { $true } } 120
-  Start-Sleep 5
-  $serverLeft = @(Get-CimInstance Win32_Process -Filter "Name='Flip7yoke-server.exe'").Count
-  $rulesLeft = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue).Count
-  Check 'C1 uninstall stops the game and removes the program' ($serverLeft -eq 0 -and -not (Test-Path $app)) "program folder left $(Test-Path $app); server processes left $serverLeft"
-  Check 'C2 delete scores when asked' (-not (Test-Path $data)) "data folder left: $(Test-Path $data)"
-  Check 'C3 firewall rule removed' ($rulesLeft -eq 0) "rules named Flip7yoke left: $rulesLeft"
-}
-Note 'card reader setup' 'not run here: Windows Sandbox has no graphics card for the model, and it means a 4 GB download'
+# ---------------- Part C: uninstall while a game is running, deleting the scores ----------------
+# /DELETEDATA answers "Also delete your score history and settings?" with Yes (the question defaults to No).
+$p = Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/DELETEDATA' -Wait -PassThru
+$null = Wait-Until { if (-not (Test-Path $app) -and -not (Test-Path $data)) { $true } } 60
+Start-Sleep 3
+$serverLeft = @(Get-CimInstance Win32_Process -Filter "Name='Flip7yoke-server.exe'").Count
+$rulesLeft = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue).Count
+$uninst = Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{D666137D-4314-4D87-8F41-51FD6EF34C2F}_is1'
+$shortcuts = (Test-Path ([Environment]::GetFolderPath('Desktop') + '\Flip7yoke.lnk')) -or (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Flip7yoke.lnk")
+Check 'C1 uninstall stops the game and removes the program' ($p.ExitCode -eq 0 -and $serverLeft -eq 0 -and -not (Test-Path $app) -and -not $uninst -and -not $shortcuts) "exit $($p.ExitCode); program folder left $(Test-Path $app); server processes left $serverLeft; uninstall entry left $uninst; shortcuts left $shortcuts"
+Check 'C2 scores deleted when asked' (-not (Test-Path $data)) "data folder left: $(Test-Path $data)"
+Check 'C3 Setup''s firewall rule removed' ($rulesLeft -eq 0) "rules named Flip7yoke left: $rulesLeft"
+Note 'not tested here' 'card reader setup (no graphics card in the sandbox, and a 4 GB download); the wizard pages themselves (clicked through by hand in earlier runs)'
 
 $failed = @($results | Where-Object { $_.ok -eq $false }).Count
 Say "Finished: $failed failed."
+Stop-Transcript | Out-Null
 Set-Content -Path "$ResDir\done.txt" -Value "failed=$failed"
-Write-Host "`nAll done. You can close the sandbox." -ForegroundColor Green

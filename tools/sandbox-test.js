@@ -1,10 +1,10 @@
 // Runs the clean-PC acceptance test in Windows Sandbox: a clean Windows with no Node or Ollama.
 //   node tools/sandbox-test.js
 // Needs Windows Sandbox enabled and dist\Flip7yoke-Setup-<version>.exe built (npm run installer).
-// The sandbox runs tests/sandbox/acceptance.ps1; parts B and C ask whoever is at the sandbox window to click
-// through the normal installer and uninstaller. This side answers the sandbox's "can the host reach this URL?"
-// requests (that goes through the sandbox's firewall, as a phone's request would), prints the log as it grows,
-// and ends with the results. Results stay in tests/.tmp/sandbox-<time>/.
+// The sandbox runs tests/sandbox/acceptance.ps1, which is fully automatic: nobody needs to touch the sandbox.
+// This side answers the sandbox's "can the host reach this URL?" requests (that goes through the sandbox's
+// firewall, as a phone's request would), prints the log as it grows, closes the sandbox when the results are in,
+// and ends with them. Results stay in tests/.tmp/sandbox-<time>/.
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -33,7 +33,7 @@ spawn(SANDBOX, [wsb], { detached: true, stdio: 'ignore' }).unref();
 
 let shown = 0;
 const answered = new Set();
-// No time limit on the person's turns; it stops when the results are in or the sandbox is closed.
+// It stops when the results are in or the sandbox is closed.
 const sandboxOpen = () => /WindowsSandbox(RemoteSession|Client)/i.test(
   require('child_process').spawnSync('tasklist', ['/fo', 'csv', '/nh'], { encoding: 'utf8' }).stdout || '');
 let ticks = 0;
@@ -55,6 +55,9 @@ const tick = async () => {
   }
   if (fs.existsSync(path.join(results, 'done.txt'))) {
     const res = JSON.parse(fs.readFileSync(path.join(results, 'results.json'), 'utf8').replace(/^\uFEFF/, ''));
+    // Shutting down from inside doesn't close the sandbox's window, so close it from here (it's thrown away).
+    for (const im of ['WindowsSandboxRemoteSession.exe', 'WindowsSandboxClient.exe'])
+      require('child_process').spawnSync('taskkill', ['/im', im, '/f'], { stdio: 'ignore' });
     console.log('\n== Results');
     for (const r of [].concat(res)) console.log(`${r.ok === true ? 'PASS' : r.ok === false ? 'FAIL' : 'NOTE'}  ${r.step}: ${r.detail}`);
     process.exit(res.some(r => r.ok === false) ? 1 : 0);

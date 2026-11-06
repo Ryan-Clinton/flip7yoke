@@ -438,9 +438,17 @@ Passed:
 ### Clean-PC acceptance test (to do before any release)
 
 **Automated version:** `node tools/sandbox-test.js` runs `tests/sandbox/acceptance.ps1` in Windows Sandbox, a clean Windows with no Node or Ollama.
-- Part A is automatic. Parts B and C ask the person at the sandbox window to click through the normal installer and uninstaller, and the script checks the results.
+- **Fully automatic: nobody touches the sandbox.**
+  - The sandbox runs its start-up script with admin rights. So Setup's firewall step and the uninstaller's rule removal go through without a Windows prompt.
+  - `/DELETEDATA` on the uninstaller answers the delete-data question with Yes. It still defaults to No for people.
+  - The host closes the sandbox when the results are in.
+- **What it checks:**
+  - Part A: silent install, Start, the board, the reader state, round auto-finish, Settings, upgrade during a game, and a silent uninstall that keeps the scores.
+  - Part B: install with the desktop and firewall options; the window opening; the firewall line on a Public network, before Start and with a Windows-style Public Block rule; Start keeping the game; the host kept out on Public; making the network Private lets it in.
+  - Part C: uninstall during a game with `/DELETEDATA`. It checks the program, shortcuts, uninstall entry, data and Setup's rule are all gone.
 - The host answers "can you reach this URL?" requests, which go through the sandbox's firewall as a phone's would.
 - Results land in `tests/.tmp/sandbox-<time>/`.
+- **Not covered:** the card reader setup (no GPU, 4 GB download) and the wizard pages themselves. Those were clicked through by hand in runs 2 to 4.
 - `acceptance.ps1 -PartAOnly -NoHost -ResDir <folder> -Dist dist` dry-runs part A on a developer PC first. It installs into the current profile; uninstall and remove the data after.
 
 **Sandbox run 3 (6 Nov 2026, the sandbox's network was Public):**
@@ -473,6 +481,12 @@ Passed:
   - It now lists every inbound rule for the exe at B3.
 - **Changed after part A:** Setup's Private rule plus a Block rule for Public now gives the "make it Private" message, not "allow it in Windows Security", because making the network Private is the fix. Run 4's installer predates this.
 - **Part C not done** again within 60 minutes.
+
+**Sandbox run 5 (6 Nov 2026, fully automatic, about 2.5 minutes): all 23 checks passed, 0 failed.**
+- **Firewall:** on the Public network, the window said to make the network Private, both before and after Start, and also with a Public Block rule added. The host couldn't reach the server.
+  - Once the network was made Private, the host got in and the window said ok.
+- **Uninstall:** the normal uninstall during a game stopped it and removed the program, shortcuts, uninstall entry and Setup's rule. With `/DELETEDATA` it removed the data too.
+- **A Windows quirk:** Windows added two "flip7yoke-server.exe" Block rules for Public networks on its own when nobody answered its "Allow access?" prompt. That's why part A's window says "blocks Flip7yoke on this network" when there's no Setup rule yet.
 
 Done by hand, it's the table below: on a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column.
 
