@@ -152,11 +152,17 @@ Check 'B2 finish page launches the window' ([bool]$windowUp) "control window run
 $st = Invoke-Window 'status'
 $rule = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue | Where-Object { $_.Action -eq 'Allow' }).Count -gt 0
 $public = (Network-Category) -match 'Public'
-# On a Public network the Private-only rule doesn't apply, and the window must say so rather than "ok".
-$expect = if ($public) { 'Public' } else { 'ok' }
+# On a Public network the Private-only rule doesn't apply, and the window must say so rather than "ok", unless
+# Windows made its own Allow rule for Public networks (someone clicked Allow on its prompt), when "ok" is right.
+$publicAllow = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+  Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' -and ([string]$_.Profile) -match 'Public|Any' }).Count -gt 0
+$blockAny = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+  Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Action -eq 'Block' -and ([string]$_.Profile) -match 'Public|Any' }).Count -gt 0
+$expect = if ($public -and -not ($publicAllow -and -not $blockAny)) { 'Public' } else { 'ok' }
 Check 'B3 firewall rule from Setup, and what the window says' ($rule -and (Firewall-Line $st.out) -match $expect) "rule added $rule; $(Firewall-Line $st.out); network: $(Network-Category)"
-$rules = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Action)/$($_.Profile)" })
-Note 'B3 rules named Flip7yoke' ($rules -join ', ')
+$rules = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+  Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" })
+Note 'B3 all inbound rules for the exe' ($rules -join '; ')
 Say '  now waiting for Start to be pressed in the Flip7yoke window (up to 10 minutes)'
 $s = Wait-Until { Running } 600
 Check 'B4 Start from the window; history kept from part A' ($s -and @($s.players).Count -eq 2 -and $s.round -eq 2) "running $([bool]$s); players $(@($s.players) -join ', '); round $($s.round)"

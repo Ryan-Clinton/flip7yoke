@@ -459,6 +459,21 @@ Passed:
 - **Part C not done** within its 20 minutes, so uninstall wasn't tested. It now waits 60 minutes and reports a timeout as not tested rather than failed.
 - **Needs run 4** to retest B3, B4 and part C.
 
+**Sandbox run 4 (6 Nov 2026, Public network again):**
+- **Part A:** all passed again.
+  - The "Allow access?" prompt was cancelled, so Windows added a Block rule for Public networks.
+  - The window said "blocks Flip7yoke on this network", and the host couldn't reach the server.
+- **Part B:** B1, B2, B4 and B5 passed.
+- **B4 explained:** Windows had made two "flip7yoke-server.exe" Allow rules for Public networks, alongside Setup's Private rule.
+  - That means "Allow access?" was answered Allow at some point (Ryan saw the prompt more than once).
+  - So the host reaching the server on Public was correct.
+- **B3 "failed", but the test was wrong:**
+  - With those Allow rules in place, "ok" was the right answer.
+  - The test now expects "ok" on a Public network when an Allow rule covers Public and no Block rule does.
+  - It now lists every inbound rule for the exe at B3.
+- **Changed after part A:** Setup's Private rule plus a Block rule for Public now gives the "make it Private" message, not "allow it in Windows Security", because making the network Private is the fix. Run 4's installer predates this.
+- **Part C not done** again within 60 minutes.
+
 Done by hand, it's the table below: on a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column.
 
 | # | Do | Expect | Result |
