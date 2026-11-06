@@ -326,6 +326,13 @@ The control window is a remote control, not a babysitter. Closing it leaves the 
   - An existing record means "running" if its control port answers `/ping` with its token, or if its supervisor is alive and started under 15 seconds ago (it may not be listening yet). Otherwise the record is stale: it's removed and the claim is retried.
   - A supervisor only deletes the record if it still holds its own token. The first version let a losing second copy delete the winner's record, so the control window lost track of a running server. `tests/lifecycle.test.js` now covers this.
   - Replacing the record retries for about 2 seconds when Windows refuses because another process has it open (the control window reads it every 2 seconds). It never crashes the supervisor: testing caught one doing exactly that under load.
+- **A record that can't be written (audit round 5):**
+  - If the first full record (with the control port) can't be written, no server is started. A server nothing could stop properly is worse than none. The reason goes in `server.error.txt`.
+  - Later failures are retried every 5 seconds. Until one works, the supervisor tells the server, `/api/status` carries `recordError`, and the control window says so. `tests/lifecycle.test.js` covers this by making the record read-only mid-game.
+- **No usable record, but running (audit round 5, installed copies only):** the control window also looks for `Flip7yoke-server.exe` processes started from its exact install folder.
+  - Status shows them as "Running without its record".
+  - Stop ends their supervisors, and each server saves and exits when its supervisor goes. Stop then exits with 2 (save not confirmed), so the installer asks before replacing anything, or with 3 if anything is still there.
+  - From the repo this check is off: test servers run the same `main.js` as the real game, so only the record can tell them apart.
 - **Logs (as built):** the supervisor writes its own and the server's output to `logs\server.log` in the data folder. It moves it to `server.old.log` once it passes 5 MB.
 - **Development:** from the repo, `run.js` (which loads `main.js`) is the supervisor. It writes the same `server.pid.json`, uses the same IPC stop and control channel, and keeps its file-watching restarts. A watch restart is a supervisor-initiated stop then start, not a crash. The control window works the same way in both setups, and the command-line matching in `Get-FlipProcs` is gone.
 
@@ -427,13 +434,22 @@ Passed:
 - **Uninstall (silent):** program, shortcut and uninstall entry gone, the program folder removed, and the data kept.
 - **Settings Save** (`tests/control-window.test.js`): it writes a `config.json` the server accepts without corrections, keeps a one-player list as a list, writes `.bak`, and refuses duplicates and clashing ports without touching the file.
 
-Not checked yet, because each needs someone at the PC or a clean VM:
-- The firewall UAC prompt, yes and no.
-- The uninstall keep-or-delete question.
-- The card-reader task on a PC without Ollama.
-- The finish page's Launch box.
-- The desktop shortcut task.
-- Everything on a machine with no Node.
+### Clean-PC acceptance test (to do before any release)
+
+On a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column. Use a fresh PC or VM, or Windows Sandbox, which needs enabling first.
+
+| # | Do | Expect | Result |
+|---|---|---|---|
+| 1 | Run Setup, leave the defaults, say **Yes** to the Windows Command Processor prompt | Installs without asking for an admin password; desktop and Start menu shortcuts; finish page with "Launch Flip7yoke" ticked | |
+| 2 | Finish with Launch ticked | The Flip7yoke window opens; card reader says Ollama isn't installed | |
+| 3 | Press Start | Board opens in the browser; "Firewall: ok" (no "Phones may be blocked") | |
+| 4 | Scan the board's QR with a phone on the same Wi-Fi, join, score a round | Works; no camera button on the phone | |
+| 5 | Settings: add names, a subtitle, Wi-Fi (try **Detect** and **From Windows**), Save | The board updates without reloading; Wi-Fi QR appears | |
+| 6 | Uninstall from Windows Settings, answer **No** to deleting scores | Program and shortcuts gone; `%LOCALAPPDATA%\Flip7yoke` still there | |
+| 7 | Install again, but say **No** to the Windows prompt | Install still completes; window shows "Phones may be blocked" with **Allow phones**; pressing it and saying Yes fixes it | |
+| 8 | Card reader: press **Install Ollama** (needs about 4 GB and time) | A console installs Ollama and downloads the model; the camera button appears on phones without a restart | |
+| 9 | Run the same Setup again while a game is running | Game saved and still there after Start | |
+| 10 | Uninstall, answer **Yes** to deleting scores | `%LOCALAPPDATA%\Flip7yoke` gone; firewall rule gone (Windows Security > Firewall > Allowed apps); Ollama still installed | |
 
 ### Release checklist (manual)
 

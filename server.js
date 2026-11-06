@@ -89,6 +89,8 @@ async function start(options = {}) {
   // What every page needs besides the game itself, sent with each update. configVersion goes up whenever
   // config.json is reloaded, so open pages fetch /api/info again (names, subtitle, Wi-Fi) without a reload.
   let configVersion = 1;
+  // Set by the supervisor when it can't update server.pid.json (lib/supervisor.js), so the control window can say.
+  let recordError = null;
   const extras = () => ({ saveError: saveError(), reader: reader.state, configVersion });
 
   function broadcast() {
@@ -293,7 +295,7 @@ async function start(options = {}) {
         players: state.players.map(p => p.name), round: state.rounds.length + 1,
         scored: Object.keys(state.draft).length, urls: lanUrls(), joinUrl: joinUrl(), port,
         saveError: saveError(), reader: reader.state, dataDir,
-        configError: cfg ? cfg.error : null, restartNeeded: restartNeeded(),
+        configError: cfg ? cfg.error : null, restartNeeded: restartNeeded(), recordError,
         token: options.token || env.FLIP7_TOKEN || null,
       }, { 'Cache-Control': 'no-cache' });
     }
@@ -336,7 +338,9 @@ async function start(options = {}) {
       log(`Port ${p} not available (${e.code}); phones use :${port}`);
       resolve(null);
     });
-    s.listen(p, '0.0.0.0', () => { servers.push(s); resolve(s); });
+    // Every network address, so phones can connect. Tests use FLIP7_BIND=127.0.0.1: this PC only, which also
+    // keeps Windows from showing its firewall prompt for every new copy of the exe they start.
+    s.listen(p, options.bind || env.FLIP7_BIND || '0.0.0.0', () => { servers.push(s); resolve(s); });
   });
 
   let main;
@@ -370,7 +374,11 @@ async function start(options = {}) {
     await Promise.all(servers.map(s => new Promise(r => { s.close(() => r()); s.closeAllConnections(); })));
     return { saved: !error, error };
   }
-  return { port, act, close, reader, get state() { return state; }, get history() { return history; }, saveError };
+  return {
+    port, act, close, reader, saveError,
+    setRecordError: msg => { recordError = msg || null; },
+    get state() { return state; }, get history() { return history; },
+  };
 }
 
 module.exports = { start, cleanEntry, hostAllowed, wifiInfo };

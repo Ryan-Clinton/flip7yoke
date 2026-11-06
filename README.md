@@ -18,13 +18,22 @@ A scorekeeper for Flip 7 game nights. A big scoreboard runs on a Windows PC (on 
 
 You need a Windows 10 or 11 PC on the same Wi-Fi as the phones.
 
-1. Download `Flip7yoke-Setup-<version>.exe` from this project's [Releases page](https://github.com/Ryan-Clinton/flip7yoke/releases). Only download it from there.
-2. **Check it's the real file (optional):** the Releases page lists its SHA-256. In PowerShell, `Get-FileHash .\Flip7yoke-Setup-<version>.exe` should print the same value.
-3. Run it. Windows will probably show **"Windows protected your PC"**. The installer isn't code-signed yet, so Windows doesn't recognise it. If you downloaded it from the Releases page and the checksum matches, click **More info**, then **Run anyway**. Treat a warning on any other copy as a reason to stop.
-4. Setup asks for no admin rights. It installs just for you, into `%LOCALAPPDATA%\Programs\Flip7yoke`. It offers three options:
-   - **Desktop shortcut.**
-   - **Let phones on your home Wi-Fi connect.** This adds a Windows Firewall rule for *private* networks only, and Windows asks your permission. Say Yes, or phones can't reach the PC. If you skip it, use **Allow phones** in the Flip7yoke window later.
-   - **Set up the card reader** (optional, see below).
+1. Download `Flip7yoke-Setup-<version>.exe` from this project's [Releases page](https://github.com/Ryan-Clinton/flip7yoke/releases).
+2. Run it. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway** ([why](#about-the-windows-warning)).
+3. Click through Setup. Near the end Windows asks **"Do you want to allow this app to make changes to your device?"** for *Windows Command Processor*: that's Setup adding the firewall rule that lets phones connect. Say **Yes**.
+
+That's it. Setup needs no admin password and installs just for you.
+
+The three options on the way are:
+- **Desktop shortcut.**
+- **Let phones on your home Wi-Fi connect.** This adds a Windows Firewall rule for *private* networks only. If you skip it or say No, press **Allow phones** in the Flip7yoke window later.
+- **Set up the card reader** (optional, see below).
+
+### About the Windows warning
+
+The installer isn't code-signed yet, so Windows doesn't recognise it and shows "Windows protected your PC". That's expected for this file, as long as you downloaded it from this project's Releases page. Treat the same warning on a copy from anywhere else as a reason to stop.
+
+**To check your copy is the real one (optional):** the Releases page lists the file's SHA-256. In PowerShell, `Get-FileHash .\Flip7yoke-Setup-<version>.exe` should print the same value.
 
 ## Game night
 

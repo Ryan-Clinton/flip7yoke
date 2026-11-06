@@ -80,7 +80,7 @@ The original plan is kept below for reference.
 | `config.json` | **gitignored.** Settings (see `config.example.json`). Replaces `.env`. |
 | `state.json` / `history.json` (+ `.bak`) / `scans/` / `logs/` / `server.pid.json` / `server.error.txt` | **gitignored** runtime data: the current game, finished games, the last 30 photos and readings, server output (`logs/server.log` holds each device's user agent), the record of what's running, and the last start failure. |
 
-Env overrides (they win over `config.json`): `FLIP7_DATA` (data folder), `PORT`, `ALSO_PORT` (0 = off), `STATE_FILE`, `HISTORY_FILE`, `SCANS_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `FLIP7_NO_READER` (never contact Ollama), `FLIP7_AUTO_MS` (auto-finish pause, for tests).
+Env overrides (they win over `config.json`): `FLIP7_DATA` (data folder), `PORT`, `ALSO_PORT` (0 = off), `STATE_FILE`, `HISTORY_FILE`, `SCANS_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `FLIP7_NO_READER` (never contact Ollama), `FLIP7_AUTO_MS` (auto-finish pause, for tests), `FLIP7_BIND` (listen address; tests use `127.0.0.1` so Windows doesn't show a firewall prompt for every new copy of the exe).
 
 ## Rules as Ryan's group plays them
 - **Classic** (original deck): 0-12, +2..+10, ×2, Flip 7 +15, Second Chance.

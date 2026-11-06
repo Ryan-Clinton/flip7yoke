@@ -133,6 +133,15 @@ function Start-Flip {
   }
 }
 
+# Installed copies only: Flip7yoke-server.exe processes started from this exact install folder, found without the
+# record (it may be missing or broken). From the repo there's no safe equivalent: test servers run the same
+# main.js as the real one, so there it's the record or nothing.
+function Get-UnrecordedServers {
+  if (-not $Installed) { return @() }
+  return @(Get-CimInstance Win32_Process -Filter "Name='Flip7yoke-server.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -eq $ServerExe })
+}
+
 # Stop through the supervisor so the last scores are saved. Returns the error text if saving failed, else $null.
 function Stop-Flip {
   $result = $null
@@ -149,6 +158,14 @@ function Stop-Flip {
       $result = "The score keeper didn't answer, so it was ended. Scores saved up to its last save."
     }
     Remove-Item $PidFile -ErrorAction SilentlyContinue
+  }
+  # Safety net: anything from this install still running without a usable record. End the supervisors (no
+  # --serve): each server saves and exits when its supervisor goes. Wait up to 10s for them all to go.
+  $left = Get-UnrecordedServers
+  if ($left.Count) {
+    $left | Where-Object { $_.CommandLine -notmatch '--serve' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 40 -and (Get-UnrecordedServers).Count; $i++) { Start-Sleep -Milliseconds 250 }
+    if (-not $result) { $result = "Flip7yoke was running without its record, so it was ended. It saves before it exits, but that couldn't be confirmed." }
   }
   # Free the GPU: if the card reader is on and our model is loaded, unload just that model (other models, and an
   # Ollama started by something else, are left running; ours reloads on its next use). Then stop Ollama only if
@@ -271,13 +288,15 @@ function Get-FlipStatus {
     if ($s.saveError) { @{ On = $false; Text = "NOT SAVING SCORES: $($s.saveError)"; Running = $true } }
     else { @{ On = $true; Text = "Running: $($s.devices) device(s) connected, $who ($($s.mode))"; Running = $true } }
   } elseif ($r) { @{ On = $null; Text = 'Starting...'; Running = $true } }
+  elseif ((Get-UnrecordedServers).Count) { @{ On = $null; Text = 'Running without its record: Stop will end it (it saves first)'; Running = $true } }
   elseif ($s) { @{ On = $false; Text = "Port $($Cfg.ports.main) is in use by another program (see Settings > Ports)"; Running = $false } }
   else { @{ On = $false; Text = 'Stopped'; Running = $false } }
   if (-not $ours) { $s = $null }
   $reader = if ($s) { Get-ReaderView $s.reader } else { Get-ReaderView '' }
   $note = $script:ConfigError
   if (-not $r -and (Test-Path $ErrorFile)) { $note = "Last start failed: $((Get-Content $ErrorFile -TotalCount 1))" }
-  if ($s -and $s.configError) { $note = "Settings: $($s.configError)" }
+  if ($s -and $s.recordError) { $note = "Flip7yoke $($s.recordError) and keeps retrying. Until it works, Stop may need a second press." }
+  elseif ($s -and $s.configError) { $note = "Settings: $($s.configError)" }
   elseif ($s -and @($s.restartNeeded).Count) { $note = 'Settings changed: press Stop, then Start, to apply them.' }
   return @{ Score = $score; Reader = $reader; Phone = $(if ($s) { $s.joinUrl } else { $null }); Note = $note }
 }
@@ -298,6 +317,7 @@ switch ($Action) {
     $msg = Stop-Flip
     if ($msg) { $msg } else { 'Stopped.' }
     if ($r -and ((Test-Recorded $r.supervisorPid $r.exe $r.supervisorStart) -or (Test-Recorded $r.childPid $r.exe $r.childStart))) { exit 3 }
+    if ((Get-UnrecordedServers).Count) { exit 3 }
     if ($msg) { exit 2 }
     exit 0
   }

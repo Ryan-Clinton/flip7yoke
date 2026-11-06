@@ -68,10 +68,10 @@ async function startGame(dir) {
   const port = await freePort();
   if (!EXE) {
     const { start } = require('../server.js');
-    const g = await start({ dataDir: dir, port, alsoPort: 0, reader: false, autoMs: 100, log: () => {} });
+    const g = await start({ dataDir: dir, port, alsoPort: 0, reader: false, autoMs: 100, bind: '127.0.0.1', log: () => {} });
     return { url: `http://127.0.0.1:${port}`, stop: () => g.close() };
   }
-  const env = { ...process.env, PORT: String(port), ALSO_PORT: '0', FLIP7_DATA: dir, FLIP7_AUTO_MS: '100', FLIP7_NO_READER: '1' };
+  const env = { ...process.env, PORT: String(port), ALSO_PORT: '0', FLIP7_DATA: dir, FLIP7_AUTO_MS: '100', FLIP7_NO_READER: '1', FLIP7_BIND: '127.0.0.1' };
   for (const k of ['STATE_FILE', 'HISTORY_FILE', 'SCANS_DIR', 'OLLAMA_URL', 'OLLAMA_MODEL']) delete env[k];
   const child = spawn(EXE, ['--serve'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env });
   const url = `http://127.0.0.1:${port}`;

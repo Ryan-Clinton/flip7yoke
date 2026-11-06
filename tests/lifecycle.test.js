@@ -19,7 +19,7 @@ async function until(fn, ms = 8000) {
 }
 
 function launch(dir, port) {
-  const env = { ...process.env, FLIP7_DATA: dir, PORT: String(port), ALSO_PORT: '0', FLIP7_NO_READER: '1' };
+  const env = { ...process.env, FLIP7_DATA: dir, PORT: String(port), ALSO_PORT: '0', FLIP7_NO_READER: '1', FLIP7_BIND: '127.0.0.1' };
   for (const k of ['STATE_FILE', 'HISTORY_FILE', 'SCANS_DIR']) delete env[k];
   const cmd = EXE || process.execPath;
   const args = EXE ? [] : [path.join(__dirname, '..', 'main.js')];
@@ -128,9 +128,33 @@ test('two copies started at the same moment: one runs, the other exits, and the 
   }
 });
 
+test('a record that cannot be updated is reported in /api/status, retried, and cleared once it works', async () => {
+  const dir = tmpDir(), port = await freePort(), url = `http://127.0.0.1:${port}`;
+  const sup = launch(dir, port);
+  const pidFile = path.join(dir, 'server.pid.json');
+  try {
+    const rec = await until(() => { const r = record(dir); return r && r.port ? r : null; });
+    fs.chmodSync(pidFile, 0o444); // read-only: Windows refuses to replace it
+    process.kill(rec.childPid); // the restarted server has to be written into the record
+    const bad = await until(async () => { const s = await status(url); return s && s.recordError ? s : null; }, 15000);
+    assert.ok(bad, 'status carries recordError');
+    assert.match(bad.recordError, /server\.pid\.json/);
+    assert.strictEqual(record(dir).childPid, rec.childPid); // the record really is stale
+    fs.chmodSync(pidFile, 0o666);
+    const good = await until(async () => { const s = await status(url); return s && !s.recordError ? s : null; }, 15000);
+    assert.ok(good, 'recordError clears after a retry works');
+    assert.notStrictEqual(record(dir).childPid, rec.childPid); // and the record is current again
+  } finally {
+    try { fs.chmodSync(pidFile, 0o666); } catch {}
+    const r = record(dir);
+    if (r) await stop(r).catch(() => {});
+    await sup.exited;
+  }
+});
+
 test('port taken by another program: the supervisor gives up with a message, no restart loop', async () => {
   const dir = tmpDir(), port = await freePort();
-  const squatter = net.createServer().listen(port, '0.0.0.0');
+  const squatter = net.createServer().listen(port, '127.0.0.1'); // where the test servers listen (FLIP7_BIND)
   await new Promise(r => squatter.once('listening', r));
   try {
     const sup = launch(dir, port);
