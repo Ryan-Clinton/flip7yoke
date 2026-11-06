@@ -3,12 +3,20 @@
 # Also usable without the window: Flip7.ps1 -Action start | stop | status
 # Keep this file ASCII only: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 #   Flip7.ps1 -Action snapshot -Out <folder> draws the window and Settings to PNGs without showing them.
-param([ValidateSet('gui', 'start', 'stop', 'status', 'snapshot')] [string]$Action = 'gui', [string]$Out = '')
+#   Flip7.ps1 -Action allow-phones          adds the firewall rule if it's missing (one UAC prompt)
+#   Flip7.ps1 -Action setup-reader          installs Ollama if missing and downloads the card model (console window)
+#   Flip7.ps1 -Action selftest -Out <json>  fills Settings off-screen from a JSON file and presses Save (tests)
+#   Flip7.ps1 -Action remove-firewall       removes our firewall rule (the uninstaller uses it)
+param([ValidateSet('gui', 'start', 'stop', 'status', 'snapshot', 'allow-phones', 'remove-firewall', 'setup-reader', 'selftest')] [string]$Action = 'gui', [string]$Out = '')
+$ScriptPath = $MyInvocation.MyCommand.Path
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RunJs = Join-Path $Root 'run.js'
 $ServerExe = Join-Path $Root 'Flip7yoke-server.exe'
-$Installed = Test-Path $ServerExe
+# The installer build stamps the release version here. Installed copies are stamped, the repo's says 'dev'.
+# "Installed" goes by the stamp, not by the exe being there, so a half-finished install is still recognised as one.
+$AppVersion = 'dev'
+$Installed = $AppVersion -ne 'dev'
 
 # Data and settings: FLIP7_DATA, else %LOCALAPPDATA%\Flip7yoke when installed, else the project folder (same rule
 # as lib/paths.js).
@@ -72,7 +80,6 @@ function Post-Json($url, $body = '{}') {
 # ---- what's running: server.pid.json, written by the supervisor (lib/supervisor.js) ----
 $PidFile = Join-Path $DataDir 'server.pid.json'
 $ErrorFile = Join-Path $DataDir 'server.error.txt'
-$AppVersion = 'dev' # the installer build stamps the release version here
 
 # Is process $id the one recorded: same exe, started within a few seconds of the recorded time?
 function Test-Recorded($id, $exe, $started) {
@@ -152,10 +159,83 @@ function Stop-Flip {
 
 # A half-finished install or upgrade: the exe is missing, or isn't the version this script came with.
 function Get-InstallProblem {
-  if (-not $Installed -or $AppVersion -eq 'dev') { return $null }
-  try { $v = (& $ServerExe --version 2>$null | Select-Object -First 1) } catch { $v = $null }
+  if (-not $Installed) { return $null }
+  $v = $null
+  if (Test-Path $ServerExe) { try { $v = (& $ServerExe --version 2>$null | Select-Object -First 1) } catch { $v = $null } }
   if ($v -ne $AppVersion) { return "Flip7yoke didn't finish installing. Run the installer again." }
   return $null
+}
+
+# ---- Windows firewall: can phones reach the program that listens? ----
+# The listening program is the exe when installed, node.exe from the repo. Reading rules needs no admin.
+function Get-ServerProgram { if ($Installed) { return $ServerExe } else { return (Get-Command node -ErrorAction SilentlyContinue).Source } }
+
+# 'ok' (an enabled inbound Allow rule covers Private networks), 'blocked' (a Block rule does), 'missing', 'unknown'.
+# It can't see third-party firewalls or a router that keeps Wi-Fi devices apart, so the window says "may".
+function Test-Firewall {
+  $prog = Get-ServerProgram
+  if (-not $prog) { return 'unknown' }
+  try {
+    $rules = @(Get-NetFirewallApplicationFilter -Program $prog -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+      Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and ([string]$_.Profile) -match 'Private|Any' })
+  } catch { return 'unknown' }
+  if ($rules | Where-Object { $_.Action -eq 'Block' }) { return 'blocked' }
+  if ($rules | Where-Object { $_.Action -eq 'Allow' }) { return 'ok' }
+  return 'missing'
+}
+
+# Add the "Flip7yoke" rule (inbound TCP, this program, Private networks only). One UAC prompt; declining is fine.
+function Grant-Firewall {
+  $prog = Get-ServerProgram
+  if (-not $prog) { return $false }
+  $cmd = "netsh advfirewall firewall delete rule name=`"Flip7yoke`" program=`"$prog`" >nul 2>&1 & " +
+         "netsh advfirewall firewall add rule name=`"Flip7yoke`" dir=in action=allow program=`"$prog`" enable=yes profile=private protocol=TCP"
+  try { Start-Process cmd.exe -ArgumentList "/c $cmd" -Verb RunAs -WindowStyle Hidden -Wait } catch { return $false } # UAC declined
+  return (Test-Firewall) -eq 'ok'
+}
+
+# ---- card reader setup: install Ollama if missing, then download the model. Runs in its own console window. ----
+function Invoke-ReaderSetup {
+  Write-Host 'Flip7yoke card reader setup'
+  Write-Host 'Needs about 4 GB of downloads, and a graphics card with 6 GB or more for good speed.'
+  Write-Host ''
+  if (-not (Test-Path $OllamaExe)) {
+    Write-Host 'Installing Ollama for Windows (from ollama.com)...'
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+      winget install --id Ollama.Ollama -e
+    } else {
+      $setup = Join-Path $env:TEMP 'OllamaSetup.exe'
+      Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $setup -UseBasicParsing
+      Start-Process $setup -Wait
+    }
+    if (-not (Test-Path $OllamaExe)) { Write-Host "Ollama didn't install. You can try again from the Flip7yoke window."; return 1 }
+  }
+  # Downloading a model needs Ollama's server. The tray app usually starts it; otherwise start our own.
+  $u = [Uri]$ReaderUrl
+  $env:OLLAMA_HOST = "$($u.Host):$($u.Port)"
+  for ($i = 0; $i -lt 30 -and -not (Get-Json "$ReaderUrl/api/version" 1500); $i++) {
+    if ($i -eq 5 -and -not (Get-OurOllama)) {
+      New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+      $p = Start-Process $OllamaExe -ArgumentList 'serve' -WindowStyle Hidden -PassThru `
+        -RedirectStandardError (Join-Path $LogDir 'ollama.log') -RedirectStandardOutput (Join-Path $LogDir 'ollama.out.log')
+      Set-Content -Path $OllamaPidFile -Value $p.Id -Encoding ascii
+    }
+    Start-Sleep -Seconds 1
+  }
+  $tags = Get-Json "$ReaderUrl/api/tags" 5000
+  if (-not $tags) { Write-Host "Ollama isn't answering at $ReaderUrl. Try again from the Flip7yoke window."; return 1 }
+  if (@($tags.models | Where-Object { $_.name -eq $ReaderModel -or $_.model -eq $ReaderModel }).Count) {
+    Write-Host "The card model ($ReaderModel) is already downloaded."
+  } else {
+    Write-Host "Downloading the card model ($ReaderModel, 3.3 GB)..."
+    & $OllamaExe pull $ReaderModel
+    if ($LASTEXITCODE -ne 0) { Write-Host "The download didn't finish. You can try again from the Flip7yoke window."; return 1 }
+  }
+  # If the score keeper is running, tell it to look again so the camera button appears straight away.
+  $r = Get-FlipServer
+  if ($r -and $r.port) { Post-Json "http://127.0.0.1:$($r.port)/api/reader/check" | Out-Null }
+  Write-Host 'Card reader ready.'
+  return 0
 }
 
 # What the reader line says, and what its button offers, for each state the server reports.
@@ -195,10 +275,48 @@ function Get-FlipStatus {
   return @{ Score = $score; Reader = $reader; Phone = $(if ($s) { $s.joinUrl } else { $null }); Note = $note }
 }
 
+$FirewallText = @{
+  missing = 'Phones may be blocked by the Windows firewall.'
+  blocked = 'The Windows firewall blocks Flip7yoke on private networks: allow it in Windows Security > Firewall.'
+}
+
 switch ($Action) {
   'start'  { $p = Get-InstallProblem; if ($p) { $p; exit 1 }; Start-Flip; return }
-  'stop'   { $msg = Stop-Flip; if ($msg) { $msg } else { 'Stopped.' }; return }
-  'status' { $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"; if ($st.Note) { $st.Note }; return }
+  'stop'   {
+    # Exit code 3 if anything recorded is still running afterwards (the installer won't replace files then).
+    $r = Get-FlipServer
+    $msg = Stop-Flip
+    if ($msg) { $msg } else { 'Stopped.' }
+    if ($r -and ((Test-Recorded $r.supervisorPid $r.exe $r.supervisorStart) -or (Test-Recorded $r.childPid $r.exe $r.childStart))) { exit 3 }
+    exit 0
+  }
+  'status' {
+    $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"
+    $fw = Test-Firewall; "Firewall:     $(if ($FirewallText[$fw]) { $FirewallText[$fw] } else { $fw })"
+    if ($st.Note) { $st.Note }
+    return
+  }
+  'allow-phones' {
+    if ((Test-Firewall) -eq 'ok') { 'Phones are already allowed through the Windows firewall.'; exit 0 }
+    if (Grant-Firewall) { 'Phones are now allowed through the Windows firewall (private networks only).'; exit 0 }
+    "Not allowed yet: phones can't connect until it is. Use 'Allow phones' in the Flip7yoke window to try again."
+    exit 1
+  }
+  'remove-firewall' {
+    # Used by the uninstaller: remove our own "Flip7yoke" rule for this program, if there is one (one UAC prompt).
+    $prog = Get-ServerProgram
+    $ours = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object { $_.Program -eq $prog })
+    if (-not $ours.Count) { 'No Flip7yoke firewall rule to remove.'; exit 0 }
+    try { Start-Process netsh.exe -ArgumentList "advfirewall firewall delete rule name=`"Flip7yoke`" program=`"$prog`"" -Verb RunAs -WindowStyle Hidden -Wait } catch { 'Left the firewall rule in place (permission declined).'; exit 1 }
+    'Removed the Flip7yoke firewall rule.'
+    exit 0
+  }
+  'setup-reader' {
+    $code = Invoke-ReaderSetup
+    Write-Host ''
+    Read-Host 'Press Enter to close' | Out-Null
+    exit $code
+  }
 }
 
 # ---- the window ----
@@ -248,7 +366,10 @@ $readerLbl = New-Label '...' 20 130 420 22 10
 $fixBtn = New-Button 'Fix' 20 154 200 28 $panel $gold
 $fixBtn.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
 $fixBtn.Visible = $false
-New-Label 'PHONES JOIN AT' 20 192 420 18 8 $true $muted | Out-Null
+New-Label 'PHONES JOIN AT' 20 192 260 18 8 $true $muted | Out-Null
+$fwBtn = New-Button 'Allow phones' 300 186 140 26 $panel $gold
+$fwBtn.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$fwBtn.Visible = $false
 $phoneLbl = New-Label '-' 20 210 420 26 12 $true $gold
 $noteLbl = New-Label '' 20 240 420 36 9 $false $gold
 
@@ -271,7 +392,12 @@ function Update-Status {
   $fixBtn.Visible = [bool]$st.Reader.Fix
   if ($st.Reader.Fix) { $fixBtn.Text = $st.Reader.Fix }
   $phoneLbl.Text = if ($st.Phone) { $st.Phone } else { '-' }
-  $noteLbl.Text = if ($st.Note) { $st.Note } else { '' }
+  # The firewall check takes a moment, so refresh it every 30s (and after Start or Allow phones), not every tick.
+  if (-not $script:FwAt -or ((Get-Date) - $script:FwAt).TotalSeconds -gt 30) { $script:Fw = Test-Firewall; $script:FwAt = Get-Date }
+  $fwBtn.Visible = $script:Fw -eq 'missing'
+  $note = $st.Note
+  if (-not $note -and $FirewallText[$script:Fw]) { $note = $FirewallText[$script:Fw] }
+  $noteLbl.Text = if ($note) { $note } else { '' }
   $running = [bool]$st.Score.Running
   $startBtn.Enabled = -not $running
   $stopBtn.Enabled = [bool]$running
@@ -305,6 +431,7 @@ $startBtn.Add_Click({
   $problem = Get-InstallProblem
   if ($problem) { [System.Windows.Forms.MessageBox]::Show($form, $problem, 'Flip7yoke') | Out-Null; return }
   Invoke-Busy 'Starting...' { Start-Flip }
+  $script:FwAt = $null
   # Give it a moment to come up, then open the board on this screen (only if it's ours that answered).
   $ok = $false
   for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
@@ -328,20 +455,19 @@ $dataBtn.Add_Click({
   Start-Process explorer.exe $DataDir
 })
 $fixBtn.Add_Click({
-  switch -Wildcard ($fixBtn.Text) {
-    'Install Ollama' {
-      if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', 'winget install --id Ollama.Ollama -e; Write-Host; Read-Host "Done. Press Enter to close"'
-      } else { Start-Process 'https://ollama.com/download' }
-    }
-    'Download model*' {
-      $cmd = "& '$OllamaExe' pull $ReaderModel; Write-Host; Read-Host 'Done. Press Enter to close'"
-      Start-Process powershell.exe -ArgumentList '-NoProfile', '-Command', $cmd
-    }
-    default { }
+  # Install Ollama / Download model: the same setup the installer offers, in a visible console window.
+  # It ends by asking the score keeper to check again. Check again just asks for that check now.
+  if ($fixBtn.Text -ne 'Check again') {
+    Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Action', 'setup-reader'
   }
-  # Every fix ends with a fresh check, so the camera button appears as soon as the reader is ready.
-  Post-Json "$ScoreUrl/api/reader/check" | Out-Null
+  $r = Get-FlipServer
+  if ($r -and $r.port) { Post-Json "http://127.0.0.1:$($r.port)/api/reader/check" | Out-Null }
+  Update-Status
+})
+$fwBtn.Add_Click({
+  $ok = Grant-Firewall
+  $script:FwAt = $null
+  if (-not $ok) { [System.Windows.Forms.MessageBox]::Show($form, "Phones still can't get through the Windows firewall. Press Allow phones and answer Yes to let it add the rule.", 'Flip7yoke') | Out-Null }
   Update-Status
 })
 
@@ -360,7 +486,9 @@ function Get-WifiKey($ssid) {
 }
 
 # The settings window. With -SnapshotPath it is drawn to that image file instead of shown (README screenshots, checks).
-function Show-Settings($SnapshotPath) {
+# With -AutoSave (a hashtable of field values) it is filled in off-screen and Save is pressed (selftest); problems
+# land in $script:SettingsProblems instead of a message box.
+function Show-Settings($SnapshotPath, $AutoSave) {
   $c = Get-Config
   $f = New-Object System.Windows.Forms.Form
   $f.Text = 'Flip7yoke settings'; $f.ClientSize = New-Object System.Drawing.Size(480, 600)
@@ -441,7 +569,11 @@ function Show-Settings($SnapshotPath) {
     if ($m -eq $a -and $a -ne 0) { $problems += 'The two ports must be different.' }
     if ($ssid.Text.Length -gt 32) { $problems += 'The network name is longer than 32 characters.' }
     if ($pw.Text.Length -gt 63) { $problems += 'The Wi-Fi password is longer than 63 characters.' }
-    if ($problems.Count) { [System.Windows.Forms.MessageBox]::Show($f, ($problems -join "`r`n"), 'Flip7yoke settings') | Out-Null; return }
+    $script:SettingsProblems = $problems
+    if ($problems.Count) {
+      if ($AutoSave) { return }
+      [System.Windows.Forms.MessageBox]::Show($f, ($problems -join "`r`n"), 'Flip7yoke settings') | Out-Null; return
+    }
 
     $c.players = @($names)
     $c.subtitle = $sub.Text.Trim()
@@ -453,18 +585,36 @@ function Show-Settings($SnapshotPath) {
     $f.Close()
   })
   if ($SnapshotPath) { Save-Snapshot $f $SnapshotPath; $f.Dispose(); return }
+  if ($AutoSave) {
+    Show-OffScreen $f
+    if ($AutoSave.ContainsKey('players')) { $players.Text = ($AutoSave.players -join "`r`n") }
+    if ($AutoSave.ContainsKey('subtitle')) { $sub.Text = $AutoSave.subtitle }
+    if ($AutoSave.ContainsKey('ssid')) { $ssid.Text = $AutoSave.ssid }
+    if ($AutoSave.ContainsKey('password')) { $pw.Text = $AutoSave.password }
+    if ($AutoSave.ContainsKey('showOnBoard')) { $show.Checked = [bool]$AutoSave.showOnBoard }
+    if ($AutoSave.ContainsKey('reader')) { $reader.Checked = [bool]$AutoSave.reader }
+    if ($AutoSave.ContainsKey('main')) { $pMain.Text = [string]$AutoSave.main }
+    if ($AutoSave.ContainsKey('also')) { $pAlso.Text = [string]$AutoSave.also }
+    $save.PerformClick()
+    $f.Dispose()
+    return
+  }
   [void]$f.ShowDialog($form)
   $subLbl.Text = [string](Get-Config).subtitle
   Update-Status
 }
 $settingsBtn.Add_Click({ Show-Settings })
 
-# Draw a window to a PNG without putting it on screen.
-function Save-Snapshot($win, $path) {
-  # Controls only exist once a window is shown, so show it off-screen and fully transparent for a moment.
+# Controls only exist once a window is shown, so show it off-screen and fully transparent for a moment.
+function Show-OffScreen($win) {
   $win.StartPosition = 'Manual'; $win.Location = New-Object System.Drawing.Point(-20000, -20000)
   $win.ShowInTaskbar = $false; $win.Opacity = 0
   $win.Show(); [System.Windows.Forms.Application]::DoEvents()
+}
+
+# Draw a window to a PNG without putting it on screen.
+function Save-Snapshot($win, $path) {
+  Show-OffScreen $win
   $bmp = New-Object System.Drawing.Bitmap -ArgumentList $win.Width, $win.Height
   $win.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle -ArgumentList 0, 0, $win.Width, $win.Height))
   $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -479,6 +629,16 @@ if ($Action -eq 'snapshot') {
   Show-Settings (Join-Path $Out 'settings-window.png')
   "Saved control-window.png and settings-window.png in $Out"
   return
+}
+
+if ($Action -eq 'selftest') {
+  # $Out is a JSON file of field values, e.g. {"players":["A","B"],"main":7790,"also":0}.
+  $vals = @{}
+  ([IO.File]::ReadAllText($Out) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $vals[$_.Name] = $_.Value }
+  Show-Settings $null $vals
+  if (@($script:SettingsProblems).Count) { "PROBLEMS: $($script:SettingsProblems -join ' | ')"; exit 1 }
+  'SAVED'
+  exit 0
 }
 
 $timer = New-Object System.Windows.Forms.Timer

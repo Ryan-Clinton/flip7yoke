@@ -1,0 +1,28 @@
+Flip7yoke: unofficial score keeper for Flip 7. Not affiliated with The Op, who publish Flip 7.
+The design is our own; no card art from the published game is used.
+
+Flip7yoke itself is MIT licensed (LICENSE.txt). It includes the following, each under its own licence,
+with the full texts in the licenses folder:
+
+Node.js 22.20.0
+  The runtime inside Flip7yoke-server.exe (a Node.js single executable application).
+  Licence: MIT, plus the licences of the components Node.js bundles.
+  licenses\Node.js-LICENSE.txt
+
+Barlow Condensed (weights 500, 600, 700)
+  Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+  Licence: SIL Open Font License, Version 1.1
+  licenses\OFL-Barlow.txt
+
+Big Shoulders Inline (weight 800)
+  Copyright 2019 The Big Shoulders Project Authors (https://github.com/xotypeco/big_shoulders)
+  Licence: SIL Open Font License, Version 1.1
+  licenses\OFL-BigShoulders.txt
+
+qrcode-generator 1.4.4
+  Copyright (c) 2009 Kazuhiko Arase
+  Licence: MIT
+  licenses\MIT-qrcode-generator.txt
+
+Optional, not included: the card reader uses Ollama (https://ollama.com) and the Qwen3-VL model, which the
+"Set up the card reader" step downloads from their publishers under their own licences.

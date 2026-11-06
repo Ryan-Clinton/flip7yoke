@@ -66,6 +66,8 @@ The original plan is kept below for reference.
 | `lib/reader.js` | Card reader (prompt, schema, `readCards()`, unchanged), plus states off / checking / no-ollama / no-model / ready and a 30s health check. |
 | `lib/net.js`, `lib/paths.js` | The join address; the data folder and page files (from disk, or from inside the exe). |
 | `tools/build.js` | Builds `dist\Flip7yoke-server.exe` (Node single executable) and smoke-tests it. |
+| `installer/Flip7yoke.iss`, `tools/build-installer.js` | The Windows installer (Inno Setup 6.7): `npm run installer` → `dist\Flip7yoke-Setup-<version>.exe`. Per-user install into `%LOCALAPPDATA%\Programs\Flip7yoke`. |
+| `LICENSE`, `THIRD-PARTY-NOTICES.txt`, `licenses/` | MIT for Flip7yoke; Node.js, font (OFL) and qrcode-generator licences, shipped with the installer. |
 | `tests/` | `npm test`. Set `FLIP7_TEST_EXE` to run the same tests against the exe. Throwaway data goes in `tests/.tmp/` (gitignored). |
 | `public/rules.js` | Scoring for classic, vengeance and brutal. Shared by server (`require`) and browser (`<script>`). |
 | `public/index.html` | The whole front end: phone view `/`, board view `/board`, scoring sheet, menu, history. |
@@ -105,6 +107,7 @@ Env overrides (they win over `config.json`): `FLIP7_DATA` (data folder), `PORT`,
 - **Keep `Flip7.ps1` ASCII only** (PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
 - **Server changes need a restart** to take effect. In development the supervisor does it automatically; pages and CSS are read fresh on every request. Settings changes to players, subtitle, Wi-Fi and reader on/off apply live; ports, join address and the reader URL or model apply on the next Start. After changing anything, restart and **check the live result yourself**. Ryan was annoyed when told to restart things by hand.
 - **Testing on Windows:** `npm test`, plus a live server on a spare port with a throwaway data folder (`FLIP7_DATA=tests/.tmp/x PORT=7799 ALSO_PORT=0 node run.js`), so the real game is untouched. Point `OLLAMA_URL` at a test Ollama if needed. For the control window, `Flip7.ps1 -Action start|status|stop|snapshot` with `FLIP7_DATA` set. Never screen-capture to check a window: use `-Action snapshot`, which draws it off-screen.
+- **Installing on Ryan's own PC:** the installer's desktop shortcut is also called "Flip7yoke", so ticking it replaces his shortcut to the repo copy. Untick it when testing installs here, and give the installed copy spare ports in `%LOCALAPPDATA%\Flip7yoke\config.json` so it can't clash with the real game.
 - **rcedit:** don't add it back. Every version on npm is marked "no longer supported" (pulled), so the exe keeps Node's icon and description for now.
 
 ## How Ryan wants you to work

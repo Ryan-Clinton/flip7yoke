@@ -1,6 +1,6 @@
 # Flip7yoke installer: spec
 
-Status: **Stages 1 to 3 built** (5 Nov 2026), awaiting the post-Stage-3 audit. Stages 4 and 5 are still plans. Written 5 Nov 2026; revised after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`), then where building Stages 1 to 3 showed a better or necessary way (each marked **As built**).
+Status: **Stages 1 to 4 built** (5 and 6 Nov 2026). Stage 5 (README, clean-PC checks, release) is still a plan, and nothing is public. Written 5 Nov 2026; revised after ChatGPT audit rounds 1 (`ac5e102`) and 2 (`d70d3dc`), then where building Stages 1 to 3 showed a better or necessary way (each marked **As built**).
 
 ## What's built (Stages 1 to 3)
 
@@ -19,9 +19,13 @@ Status: **Stages 1 to 3 built** (5 Nov 2026), awaiting the post-Stage-3 audit. S
 | Card-reader check | `node tools/eval-scans.js --url <server>` |
 | Clean stop from a terminal | `node tools/stop.js [data folder]` |
 | Icon | `tools/make-icon.ps1` → `assets\flip7yoke.ico` |
+| Installer | `installer/Flip7yoke.iss`; `npm run installer` (`tools/build-installer.js`) → `dist\Flip7yoke-Setup-<version>.exe` + `.sha256` |
+| Licences | `LICENSE` (MIT), `THIRD-PARTY-NOTICES.txt`, `licenses/` (Node.js 22.20.0, OFL for Barlow and Big Shoulders, MIT for qrcode-generator; exact texts from their sources) |
+| Settings Save test | `tests/control-window.test.js` (fills the real Settings form off-screen and presses Save) |
 
 Results on Ryan's PC (GTX 1080, Windows 11, Node 22.20.0, Ollama for Windows 0.40.14):
-- Tests: 23 pass from the repo. Against the exe, 20 pass and 3 are skipped because they test internal modules directly.
+- Tests: 25 pass from the repo. Against the exe, 20 pass and 3 are skipped because they test internal modules directly.
+- Installer: 22 MB.
 - Card reader: 15/15 against the exe, about 5 seconds a photo; it was about 3 on the old WSL Ollama.
 - The exe is 82 MB.
 
@@ -360,9 +364,9 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
   - If the user presses Cancel, Inno Setup undoes what it can.
   - If setup is killed or the PC loses power halfway, the program folder may be half old, half new, and the app may not start. The fix is to run the installer again (it repairs over the top). Older installers stay on GitHub Releases as a way back.
   - No transactional update system.
-- **Detecting a broken install:** the control window checks that `Flip7yoke-server.exe` exists and that `Flip7yoke-server.exe --version` matches the version stamped into `Flip7yoke.ps1` (`$AppVersion`) at build time. That check is written; until the installer build stamps a version, `$AppVersion` is `dev`, which skips it. If not, it says "Flip7yoke didn't finish installing. Run the installer again." and doesn't try to start.
+- **Detecting a broken install:** the control window checks that `Flip7yoke-server.exe` exists and that `Flip7yoke-server.exe --version` matches the version stamped into `Flip7yoke.ps1` (`$AppVersion`) at build time. If either fails, it says "Flip7yoke didn't finish installing. Run the installer again." and doesn't start. **As built:** "installed" is decided by the version stamp (the repo's copy says `dev`), not by the exe being present. The first version decided it by the exe, so a missing exe made the window treat the install folder as a repo copy; testing caught that.
 - **Settings changes between versions:**
-  - `config.json` has a `version` number. The new server migrates old versions on first start, after saving a copy as `config.v<old>.json`.
+  - `config.json` has a `version` number. The new server migrates old versions on first start, after saving a copy as `config.v<old>.json`. **As built:** there is only version 1 so far, so no migration code exists yet; it gets written alongside the first change of shape.
   - `state.json` and `history.json` get the same treatment if their shape ever changes. They're backed up as `*.v<old>.json` before migrating, and the old copy is never overwritten.
 - **Running game:** after an upgrade, Start resumes the saved game where it left off (the auto-finish timer resets, as it does now on restart).
 
@@ -373,7 +377,49 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
 - Asks whether to delete `%LOCALAPPDATA%\Flip7yoke` (score history and settings); the default is to keep it.
 - It never uninstalls Ollama or the model.
 
+### Stage 4 as built
+
+- **Script:** `installer/Flip7yoke.iss`, built by `npm run installer` with Inno Setup 6.7.3 (the build looks for `ISCC.exe` in the `ISCC` env var and the usual install folders). The build:
+  - Builds and smoke-tests the exe first (`--skip-exe` reuses `dist\Flip7yoke-server.exe` if its `--version` matches).
+  - Stamps the version into a copy of `Flip7.ps1` (installed as `Flip7yoke.ps1`), checking it's ASCII only.
+  - Writes `dist\Flip7yoke-Setup-<version>.exe`, 22 MB, and its `.sha256`.
+- **Install:** per-user (`PrivilegesRequired=lowest`) into `%LOCALAPPDATA%\Programs\Flip7yoke`, with a fixed `AppId`. It creates a Start menu shortcut, plus a desktop shortcut (ticked by default). The welcome page carries the disclaimer.
+- **Tasks:**
+  - **Firewall** (ticked): runs `Flip7yoke.ps1 -Action allow-phones`. The window's "Allow phones" button is the same code.
+  - **Card reader** (unticked): runs `Flip7yoke.ps1 -Action setup-reader` in a visible console without holding up the installer. The window's "Install Ollama" and "Download model" buttons run the same thing.
+- **Firewall check:** `Get-NetFirewallApplicationFilter -Program <exe>` with the rules it belongs to, which needs no admin. That replaces parsing `netsh show rule`, whose labels are translated on non-English Windows.
+  - It accepts **any** enabled inbound Allow rule covering Private networks, including the ones Windows makes itself from its "Allow access?" prompt.
+  - A Block rule covering Private networks is reported as blocked, with a pointer to Windows Security.
+  - In the window it's refreshed every 30 seconds, and after Start or Allow phones.
+- **Windows' own prompt:** the first time an exe at a new path listens, Windows Defender Firewall may show its own "Allow access?" prompt.
+  - With no `rcedit`, the prompt calls the program "Node.js JavaScript Runtime".
+  - The rule it makes can cover Public networks too, if both boxes are ticked.
+  - Uninstall removes only our own "Flip7yoke" rule (`-Action remove-firewall`, one UAC prompt only if that rule exists). Rules Windows made from its prompt are left alone.
+- **Upgrades:** `PrepareToInstall` runs the installed `Flip7yoke.ps1 -Action stop`, which exits with 3 if anything recorded is still running. In that case the installer stops with "Nothing was changed".
+- **Uninstall:**
+  - `InitializeUninstall` stops the server the same way.
+  - `[UninstallDelete]` removes the program folder if it's left empty.
+  - The keep-or-delete question uses No as its default. A silent uninstall never deletes data.
+
 ## Stage 5: validate and release
+
+### Checked so far (Ryan's PC, 6 Nov 2026, silent installs with no desktop, firewall or reader tasks)
+
+Passed:
+- **Install:** files, licences, uninstall entry, Start menu shortcut and stamped version all correct, with no admin rights needed. The existing desktop shortcut was untouched.
+- **Upgrade with a game in progress:** setup stopped the running copy through its supervisor. The in-progress game (a player with 7+8 entered) was saved and came back after Start.
+- **Exe missing:** the control window says "didn't finish installing" and refuses to start (exit code 1), and writes nothing into the program folder. That's the second version; the first one failed this check, as noted above.
+- **Setup killed, then run again:** the kill landed after the files had been copied, so it didn't make a half-copied folder. Rerunning setup repaired over the top and the app worked.
+- **Uninstall (silent):** program, shortcut and uninstall entry gone, the program folder removed, and the data kept.
+- **Settings Save** (`tests/control-window.test.js`): it writes a `config.json` the server accepts without corrections, keeps a one-player list as a list, writes `.bak`, and refuses duplicates and clashing ports without touching the file.
+
+Not checked yet, because each needs someone at the PC or a clean VM:
+- The firewall UAC prompt, yes and no.
+- The uninstall keep-or-delete question.
+- The card-reader task on a PC without Ollama.
+- The finish page's Launch box.
+- The desktop shortcut task.
+- Everything on a machine with no Node.
 
 ### Release checklist (manual)
 
