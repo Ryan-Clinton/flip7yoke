@@ -488,6 +488,13 @@ Passed:
 - **Uninstall:** the normal uninstall during a game stopped it and removed the program, shortcuts, uninstall entry and Setup's rule. With `/DELETEDATA` it removed the data too.
 - **A Windows quirk:** Windows added two "flip7yoke-server.exe" Block rules for Public networks on its own when nobody answered its "Allow access?" prompt. That's why part A's window says "blocks Flip7yoke on this network" when there's no Setup rule yet.
 
+**Release build (6 Nov 2026, commit `9e5f5b3`, the published 0.9.0):**
+- Rebuilt from that commit: the exe, then the installer, SHA-256 `29E8AEE60C56D2DF4D0A0AB771175BA8EB07806A1DC216F25C89DD3411507C5B`.
+- The tests against the exe: 26 passed, 3 skipped (repo-only), 0 failed.
+- Sandbox run 6 on that installer: all 23 checks passed, the same set as run 5.
+- GitHub's digest of the uploaded file matches that hash.
+- The card reader setup is still not covered on a clean PC. It stays optional: unticked in Setup, and labelled optional in the README and the release notes.
+
 Done by hand, it's the table below: on a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column.
 
 | # | Do | Expect | Result |
