@@ -56,7 +56,7 @@ const tick = async () => {
     for (const r of [].concat(res)) console.log(`${r.ok === true ? 'PASS' : r.ok === false ? 'FAIL' : 'NOTE'}  ${r.step}: ${r.detail}`);
     process.exit(res.some(r => r.ok === false) ? 1 : 0);
   }
-  if (Date.now() - started > 60 * 60 * 1000) { console.log('Gave up after an hour.'); process.exit(1); }
+  if (Date.now() - started > 3 * 60 * 60 * 1000) { console.log('Gave up after 3 hours.'); process.exit(1); }
   setTimeout(tick, 1000);
 };
 tick();

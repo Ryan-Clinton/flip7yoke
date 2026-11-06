@@ -102,6 +102,7 @@ Use **Settings > Apps > Installed apps > Flip7yoke > Uninstall** in Windows.
 - **A phone can't open the game:**
   - Make sure it's on the same Wi-Fi as the PC, not mobile data or a guest network.
   - If the window says "Phones may be blocked by the Windows firewall", press **Allow phones**.
+  - If it says Windows treats the network as Public, make it Private: **Settings > Network & internet**, your Wi-Fi's properties, **Private network**. Setup's firewall rule only covers private networks.
   - Some routers keep Wi-Fi devices apart ("client isolation" or "AP isolation"). Turn that off in the router, or use a network that allows it.
   - One Android phone's Chrome couldn't reach port 7777 but its Samsung Internet browser could. Typing the address without `:7777` (port 80) also helps.
 - **"Port 7777 is in use by another program":** another program has the port. Close it, or change **Ports** in Settings.

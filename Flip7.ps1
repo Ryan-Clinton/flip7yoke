@@ -194,14 +194,15 @@ function Get-InstallProblem {
 # The listening program is the exe when installed, node.exe from the repo. Reading rules needs no admin.
 function Get-ServerProgram { if ($Installed) { return $ServerExe } else { return (Get-Command node -ErrorAction SilentlyContinue).Source } }
 
-# 'ok' (an enabled inbound Allow rule covers Private networks), 'blocked' (a Block rule does), 'missing', 'unknown'.
+# 'ok' (an enabled inbound Allow rule covers networks of this kind: Private, Public or Domain), 'blocked' (a Block
+# rule does), 'missing', 'unknown'.
 # It can't see third-party firewalls or a router that keeps Wi-Fi devices apart, so the window says "may".
-function Test-Firewall {
+function Test-Firewall($kind = 'Private') {
   $prog = Get-ServerProgram
   if (-not $prog) { return 'unknown' }
   try {
     $rules = @(Get-NetFirewallApplicationFilter -Program $prog -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
-      Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and ([string]$_.Profile) -match 'Private|Any' })
+      Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and ([string]$_.Profile) -match "$kind|Any" })
   } catch { return 'unknown' }
   if ($rules | Where-Object { $_.Action -eq 'Block' }) { return 'blocked' }
   if ($rules | Where-Object { $_.Action -eq 'Allow' }) { return 'ok' }
@@ -209,21 +210,30 @@ function Test-Firewall {
 }
 
 # Windows' category for the network the join address is on: 'Private', 'Public', 'DomainAuthenticated', or $null.
-# A rule for Private networks doesn't apply on a Public one, and Windows makes a network Public whenever someone
-# answers No to "make this PC discoverable". Reading it needs no admin.
+# Before Start there's no join address, so it uses the network the PC's internet route goes through, which is the
+# one Automatic picks. A rule for Private networks doesn't apply on a Public one, and Windows makes a network Public
+# whenever someone answers No to "make this PC discoverable". Reading it needs no admin.
 function Get-NetworkCategory($url) {
-  if (-not $url) { return $null }
-  try { $ip = ([Uri]$url).Host } catch { return $null }
-  $a = Get-NetIPAddress -IPAddress $ip -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $a) { return $null }
-  $p = Get-NetConnectionProfile -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | Select-Object -First 1
+  $if = $null
+  if ($url) {
+    try { $ip = ([Uri]$url).Host } catch { $ip = $null }
+    if ($ip) { $a = Get-NetIPAddress -IPAddress $ip -ErrorAction SilentlyContinue | Select-Object -First 1; if ($a) { $if = $a.InterfaceIndex } }
+  }
+  if (-not $if) {
+    $r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1
+    if ($r) { $if = $r.InterfaceIndex }
+  }
+  if (-not $if) { return $null }
+  $p = Get-NetConnectionProfile -InterfaceIndex $if -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($p) { return [string]$p.NetworkCategory } else { return $null }
 }
 
-# The firewall state shown to the user: Test-Firewall, except an 'ok' rule on a Public network is 'public'.
+# The firewall state shown to the user, for the kind of network phones would come in on. On a Public network with
+# only the Private rule (Setup's), it's 'public': the fix is making the network Private, not another rule.
 function Get-PhoneAccess($url) {
-  $fw = Test-Firewall
-  if ($fw -eq 'ok' -and (Get-NetworkCategory $url) -eq 'Public') { return 'public' }
+  if ((Get-NetworkCategory $url) -ne 'Public') { return (Test-Firewall) }
+  $fw = Test-Firewall 'Public'
+  if ($fw -eq 'missing' -and (Test-Firewall) -eq 'ok') { return 'public' }
   return $fw
 }
 
@@ -322,7 +332,7 @@ function Get-FlipStatus {
 
 $FirewallText = @{
   missing = 'Phones may be blocked by the Windows firewall.'
-  blocked = 'The Windows firewall blocks Flip7yoke on private networks: allow it in Windows Security > Firewall.'
+  blocked = 'The Windows firewall blocks Flip7yoke on this network: allow it in Windows Security > Firewall.'
   public  = 'Windows treats this network as Public, which blocks phones. Make it Private in Settings > Network & internet.'
 }
 

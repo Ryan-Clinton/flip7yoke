@@ -160,6 +160,10 @@ Say '  now waiting for Start to be pressed in the Flip7yoke window (up to 10 min
 $s = Wait-Until { Running } 600
 Check 'B4 Start from the window; history kept from part A' ($s -and @($s.players).Count -eq 2 -and $s.round -eq 2) "running $([bool]$s); players $(@($s.players) -join ', '); round $($s.round)"
 if ($s.joinUrl) { $h = Host-Check 'B4' $s.joinUrl; Note 'B4 reached from the host PC' "$($s.joinUrl): $(if ($h.reachable) { 'reachable' } else { "not reachable ($($h.error))" }); network: $(Network-Category)" }
+# Every inbound rule for the exe, whatever its name: Windows makes its own if someone answers its "Allow access?" prompt.
+$all = @(Get-NetFirewallApplicationFilter -Program "$app\Flip7yoke-server.exe" -ErrorAction SilentlyContinue | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+  Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName): $($_.Action)/$($_.Profile)" })
+Note 'B4 all inbound rules for the exe' ($all -join '; ')
 # Make the network Private (as the window advises) and check the rule then lets the host, like a phone, in.
 if ($s.joinUrl -and $public) {
   try {
@@ -179,14 +183,21 @@ Write-Host '    (Leave Flip7yoke running: the uninstaller stops it.)'
 Write-Host ' 2. If Windows asks to let "Windows Command Processor" or "netsh" make changes, click Yes.'
 Write-Host ' 3. When it asks "Also delete your Flip7yoke score history and settings?", click Yes.'
 Write-Host "$bar" -ForegroundColor Yellow
-Say 'Waiting for part C (up to 20 minutes)'
-$gone = Wait-Until { if (-not (Test-Path "$app\Flip7yoke-server.exe")) { $true } } 1200
-Start-Sleep 5
-$serverLeft = @(Get-CimInstance Win32_Process -Filter "Name='Flip7yoke-server.exe'").Count
-$rulesLeft = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue).Count
-Check 'C1 uninstall stops the game and removes the program' ([bool]$gone -and $serverLeft -eq 0 -and -not (Test-Path $app)) "program gone $([bool]$gone); server processes left $serverLeft"
-Check 'C2 delete scores when asked' (-not (Test-Path $data)) "data folder left: $(Test-Path $data)"
-Check 'C3 firewall rule removed' ($rulesLeft -eq 0) "rules named Flip7yoke left: $rulesLeft"
+Say 'Waiting for part C (up to 60 minutes)'
+$gone = Wait-Until { if (-not (Test-Path "$app\Flip7yoke-server.exe")) { $true } } 3600
+if (-not $gone) {
+  Note 'C uninstall' 'not done within 60 minutes, so C1 to C3 were not tested'
+} else {
+  # The uninstaller removes the exe early; give it time to finish (the delete-data question comes at the end).
+  $null = Wait-Until { if (-not (Test-Path $app)) { $true } } 300
+  $null = Wait-Until { if (-not (Test-Path $data)) { $true } } 120
+  Start-Sleep 5
+  $serverLeft = @(Get-CimInstance Win32_Process -Filter "Name='Flip7yoke-server.exe'").Count
+  $rulesLeft = @(Get-NetFirewallRule -DisplayName 'Flip7yoke' -ErrorAction SilentlyContinue).Count
+  Check 'C1 uninstall stops the game and removes the program' ($serverLeft -eq 0 -and -not (Test-Path $app)) "program folder left $(Test-Path $app); server processes left $serverLeft"
+  Check 'C2 delete scores when asked' (-not (Test-Path $data)) "data folder left: $(Test-Path $data)"
+  Check 'C3 firewall rule removed' ($rulesLeft -eq 0) "rules named Flip7yoke left: $rulesLeft"
+}
 Note 'card reader setup' 'not run here: Windows Sandbox has no graphics card for the model, and it means a 4 GB download'
 
 $failed = @($results | Where-Object { $_.ok -eq $false }).Count

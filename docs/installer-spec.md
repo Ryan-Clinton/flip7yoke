@@ -443,6 +443,22 @@ Passed:
 - Results land in `tests/.tmp/sandbox-<time>/`.
 - `acceptance.ps1 -PartAOnly -NoHost -ResDir <folder> -Dist dist` dry-runs part A on a developer PC first. It installs into the current profile; uninstall and remove the data after.
 
+**Sandbox run 3 (6 Nov 2026, the sandbox's network was Public):**
+- **Part A, all passed:**
+  - A clean PC: no Node or Ollama.
+  - A silent install with no admin rights; the exe runs without Node.
+  - Start; the board is served from inside the exe; no camera without Ollama.
+  - A round finishes by itself; a Settings Save applies live.
+  - An upgrade during a game keeps it; a silent uninstall keeps the scores.
+  - Without the rule, the window says "Phones may be blocked", and the host couldn't reach the server.
+- **Part B:**
+  - Passed: the normal install with a desktop shortcut, Setup adding the Private rule, the finish page launching the window, and Start keeping part A's game.
+  - Making the network Private let the host in, and the window said ok.
+- **Defect found (B3):** before Start, the window said "Firewall: ok" on the Public network. The Public check went by the join address, and there isn't one until the server runs. It now falls back to the network the PC's internet route uses, and it also counts a Windows-made rule for Public networks.
+- **Unexplained (B4):** on the Public network the host reached the server, though only the Private rule was listed. The likely cause is that Windows' own "Allow access?" prompt was answered Allow. The next run lists every inbound rule for the exe to show this.
+- **Part C not done** within its 20 minutes, so uninstall wasn't tested. It now waits 60 minutes and reports a timeout as not tested rather than failed.
+- **Needs run 4** to retest B3, B4 and part C.
+
 Done by hand, it's the table below: on a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column.
 
 | # | Do | Expect | Result |
