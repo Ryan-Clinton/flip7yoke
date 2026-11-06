@@ -403,6 +403,7 @@ Inno Setup 6, version pinned in the README's build notes. `installer\Flip7yoke.i
   - It accepts **any** enabled inbound Allow rule covering Private networks, including the ones Windows makes itself from its "Allow access?" prompt.
   - A Block rule covering Private networks is reported as blocked, with a pointer to Windows Security.
   - In the window it's refreshed every 30 seconds, and after Start or Allow phones.
+- **Public networks (found in the Windows Sandbox test):** Setup's rule covers Private networks only, by design (so café Wi-Fi can't reach the game). Windows makes a network Public whenever someone answers No to "make this PC discoverable", and then the rule doesn't apply. The control window now reads the network category of the join address's adapter (`Get-NetConnectionProfile`, no admin). When the rule is fine but the network is Public, it says "Windows treats this network as Public, which blocks phones. Make it Private in Settings > Network & internet" instead of "ok".
 - **Windows' own prompt:** the first time an exe at a new path listens, Windows Defender Firewall may show its own "Allow access?" prompt.
   - With no `rcedit`, the prompt calls the program "Node.js JavaScript Runtime".
   - The rule it makes can cover Public networks too, if both boxes are ticked.
@@ -436,7 +437,13 @@ Passed:
 
 ### Clean-PC acceptance test (to do before any release)
 
-On a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column. Use a fresh PC or VM, or Windows Sandbox, which needs enabling first.
+**Automated version:** `node tools/sandbox-test.js` runs `tests/sandbox/acceptance.ps1` in Windows Sandbox, a clean Windows with no Node or Ollama.
+- Part A is automatic. Parts B and C ask the person at the sandbox window to click through the normal installer and uninstaller, and the script checks the results.
+- The host answers "can you reach this URL?" requests, which go through the sandbox's firewall as a phone's would.
+- Results land in `tests/.tmp/sandbox-<time>/`.
+- `acceptance.ps1 -PartAOnly -NoHost -ResDir <folder> -Dist dist` dry-runs part A on a developer PC first. It installs into the current profile; uninstall and remove the data after.
+
+Done by hand, it's the table below: on a Windows 10/11 PC or VM without Node or Ollama, using `dist\Flip7yoke-Setup-<version>.exe`. Fill in the last column.
 
 | # | Do | Expect | Result |
 |---|---|---|---|

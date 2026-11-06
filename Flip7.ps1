@@ -208,6 +208,25 @@ function Test-Firewall {
   return 'missing'
 }
 
+# Windows' category for the network the join address is on: 'Private', 'Public', 'DomainAuthenticated', or $null.
+# A rule for Private networks doesn't apply on a Public one, and Windows makes a network Public whenever someone
+# answers No to "make this PC discoverable". Reading it needs no admin.
+function Get-NetworkCategory($url) {
+  if (-not $url) { return $null }
+  try { $ip = ([Uri]$url).Host } catch { return $null }
+  $a = Get-NetIPAddress -IPAddress $ip -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $a) { return $null }
+  $p = Get-NetConnectionProfile -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($p) { return [string]$p.NetworkCategory } else { return $null }
+}
+
+# The firewall state shown to the user: Test-Firewall, except an 'ok' rule on a Public network is 'public'.
+function Get-PhoneAccess($url) {
+  $fw = Test-Firewall
+  if ($fw -eq 'ok' -and (Get-NetworkCategory $url) -eq 'Public') { return 'public' }
+  return $fw
+}
+
 # Add the "Flip7yoke" rule (inbound TCP, this program, Private networks only). One UAC prompt; declining is fine.
 function Grant-Firewall {
   $prog = Get-ServerProgram
@@ -304,6 +323,7 @@ function Get-FlipStatus {
 $FirewallText = @{
   missing = 'Phones may be blocked by the Windows firewall.'
   blocked = 'The Windows firewall blocks Flip7yoke on private networks: allow it in Windows Security > Firewall.'
+  public  = 'Windows treats this network as Public, which blocks phones. Make it Private in Settings > Network & internet.'
 }
 
 switch ($Action) {
@@ -323,7 +343,7 @@ switch ($Action) {
   }
   'status' {
     $st = Get-FlipStatus; "Score keeper: $($st.Score.Text)"; "Card reader:  $($st.Reader.Text)"; "Phones:       $($st.Phone)"
-    $fw = Test-Firewall; "Firewall:     $(if ($FirewallText[$fw]) { $FirewallText[$fw] } else { $fw })"
+    $fw = Get-PhoneAccess $st.Phone; "Firewall:     $(if ($FirewallText[$fw]) { $FirewallText[$fw] } else { $fw })"
     if ($st.Note) { $st.Note }
     return
   }
@@ -424,7 +444,7 @@ function Update-Status {
   if ($st.Reader.Fix) { $fixBtn.Text = $st.Reader.Fix }
   $phoneLbl.Text = if ($st.Phone) { $st.Phone } else { '-' }
   # The firewall check takes a moment, so refresh it every 30s (and after Start or Allow phones), not every tick.
-  if (-not $script:FwAt -or ((Get-Date) - $script:FwAt).TotalSeconds -gt 30) { $script:Fw = Test-Firewall; $script:FwAt = Get-Date }
+  if (-not $script:FwAt -or ((Get-Date) - $script:FwAt).TotalSeconds -gt 30) { $script:Fw = Get-PhoneAccess $st.Phone; $script:FwAt = Get-Date }
   $fwBtn.Visible = $script:Fw -eq 'missing'
   $note = $st.Note
   if (-not $note -and $FirewallText[$script:Fw]) { $note = $FirewallText[$script:Fw] }
