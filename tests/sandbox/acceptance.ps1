@@ -141,6 +141,7 @@ Write-Host '    Keep the defaults and click through.'
 Write-Host ' 2. When Windows asks to let "Windows Command Processor" make changes, click Yes.'
 Write-Host ' 3. Leave "Launch Flip7yoke" ticked and click Finish.'
 Write-Host ' 4. In the Flip7yoke window that opens, press Start. The board opens in the browser.'
+Write-Host '    If Windows asks "Allow access?" for Flip7yoke-server, click Cancel (the test checks Setup''s rule on its own).'
 Write-Host "    Leave everything open; this window carries on by itself.`n$bar" -ForegroundColor Yellow
 Say 'Waiting for part B (up to 20 minutes)'
 $installed = Wait-Until { if (Test-Path "$app\Flip7yoke-server.exe") { $true } } 1200
