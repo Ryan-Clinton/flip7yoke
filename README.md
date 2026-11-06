@@ -48,7 +48,6 @@ The installer isn't code-signed yet, so Windows doesn't recognise it and shows "
 
 **Settings** in the Flip7yoke window:
 
-- **Players:** the names offered under "Played before? Tap your name".
 - **Subtitle:** shown under the name on the board.
 - **Wi-Fi QR on the board:**
   - **Detect** fills in your network name.
@@ -58,7 +57,9 @@ The installer isn't code-signed yet, so Windows doesn't recognise it and shows "
 - **Join address:** "Automatic" picks the address on your home network. Choose one yourself if the QR code points somewhere phones can't reach, such as a VPN.
 - **Ports:** 7777, and also 80 so phones can use the address without a port number. If something else on your PC uses 80, Flip7yoke carries on with 7777.
 
-Names, subtitle, Wi-Fi and card reader on/off apply straight away, even on screens that are already open. Join address and ports apply on the next Start.
+Subtitle, Wi-Fi and card reader on/off apply straight away, even on screens that are already open. Join address and ports apply on the next Start.
+
+There's no list of player names to set up. Once a game is saved, everyone who played in it is offered under "Played before? Tap your name" on the phones.
 
 ![Settings](docs/images/settings-window.png)
 

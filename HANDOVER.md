@@ -5,7 +5,7 @@ Ryan owns this. Read **How Ryan wants you to work** before anything else.
 
 ## What it is
 
-A scorekeeper for Ryan's Thursday Flip 7 night (regulars: Ryan, Gareth, Rossi, Chris, Carlo, Jarvis, Rita).
+A scorekeeper for Ryan's Flip 7 game nights.
 
 - The PC shows a big scoreboard at `/board`, with QR codes for joining the Wi-Fi and opening the game.
 - Everyone opens the game on their phone over the home Wi-Fi, taps their name, and enters their own score each round. They can tap cards in as they are dealt, type a score, or **photograph their hand**, which a local vision model reads.
@@ -22,7 +22,7 @@ Repo: `github.com/Ryan-Clinton/flip7yoke` (private). Branch `main`. Ryan's rule 
 | Project files and git | **Windows** `C:\Projects\flip7yoke` | The WSL copy `/home/facepipe/flip7` is retired; don't edit it |
 | Score keeper | **Windows** Node v22.20.0 | `node run.js`: the supervisor (`lib/supervisor.js`) runs the server (`main.js --serve`) and restarts it on crashes and code changes. Data, settings and logs live in the project folder |
 | Control window `Flip7.ps1` | **Windows** PowerShell 5.1 WinForms | Desktop shortcut "Flip7yoke" (now points at `C:\Projects\flip7yoke\Flip7.ps1`) and `start.bat` |
-| Settings | `config.json` (gitignored) | Players, subtitle, Wi-Fi, card reader, join address, ports. Edit in the control window's Settings. `.env` was moved in and renamed `.env.migrated` |
+| Settings | `config.json` (gitignored) | Subtitle, Wi-Fi, card reader, join address, ports. There's no names setting: "Played before?" lists the people in saved games. Edit in the control window's Settings. `.env` was moved in and renamed `.env.migrated` |
 | Card reader | Ollama for Windows 0.40.14 (the tray app starts it at login), model `qwen3-vl:4b-instruct` on the GTX 1080 | Port 11434. The WSL Ollama is retired (stopped 5 Nov 2026) |
 | Board | Windows Chrome | `http://localhost:7777/board` |
 | Packaged exe | `dist\Flip7yoke-server.exe` (gitignored) | `npm install`, then `npm run build` |
@@ -53,7 +53,7 @@ The original plan is kept below for reference.
 - **`Install.ps1`:** winget Node LTS (+ Ollama optional), pull the model, add a firewall rule for node on Private networks, create the shortcut.
 - **README** with screenshots, MIT `LICENSE`, plus the licences for the bundled fonts (OFL: Big Shoulders, Barlow) and `qrcode.min.js` (qrcode-generator 1.4.4, MIT).
 - **Disclaimer:** "Unofficial score keeper for Flip 7. Not affiliated with The Op." The design is our own, inspired by the deck; don't use their card art.
-- **Release:** zip on GitHub Releases. **Ask Ryan before making the repo public.** Consider a fresh single-commit public repo. Git history is clean (checked: no `.env`, state, photos or logs were ever committed); the only personal data in code is `REGULARS`.
+- **Release:** zip on GitHub Releases. **Ask Ryan before making the repo public.** Consider a fresh single-commit public repo. Git history is clean (checked: no `.env`, state, photos or logs were ever committed). Friends' first names are in old code and test data.
 
 ## Files
 

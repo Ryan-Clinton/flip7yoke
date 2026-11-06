@@ -87,7 +87,8 @@ async function start(options = {}) {
   const clients = new Set();
   const saveError = () => saveErrors.state || saveErrors.history || null;
   // What every page needs besides the game itself, sent with each update. configVersion goes up whenever
-  // config.json is reloaded, so open pages fetch /api/info again (names, subtitle, Wi-Fi) without a reload.
+  // config.json is reloaded or the saved games change, so open pages fetch /api/info again (past players'
+  // names, subtitle, Wi-Fi) without a reload.
   let configVersion = 1;
   // Set by the supervisor when it can't update server.pid.json (lib/supervisor.js), so the control window can say.
   let recordError = null;
@@ -103,7 +104,7 @@ async function start(options = {}) {
     broadcast();
   }
 
-  // Live settings: players, subtitle, Wi-Fi and the card reader on/off. The rest waits for the next Start.
+  // Live settings: subtitle, Wi-Fi and the card reader on/off. The rest waits for the next Start.
   function applyConfig() {
     reader.setEnabled(o.reader && C().cardReader.enabled !== false);
     broadcast();
@@ -133,6 +134,17 @@ async function start(options = {}) {
       })),
     });
     historyStore.save(history);
+    configVersion++; // the past players' names changed
+  }
+
+  // "Played before? Tap your name": everyone in a saved game, most recent game first, each name once.
+  function pastPlayers() {
+    const seen = new Set(), out = [];
+    for (const g of history) for (const p of g.players || []) {
+      const key = String(p.name).toLowerCase();
+      if (p.name && !seen.has(key)) { seen.add(key); out.push(p.name); }
+    }
+    return out;
   }
 
   const actions = {
@@ -196,7 +208,7 @@ async function start(options = {}) {
     deleteHistory({ id }) {
       const before = history.length;
       history = history.filter(g => g.id !== id);
-      if (history.length !== before) historyStore.save(history);
+      if (history.length !== before) { historyStore.save(history); configVersion++; }
     },
   };
 
@@ -303,7 +315,7 @@ async function start(options = {}) {
       return json(res, 200, {
         urls: lanUrls(), joinUrl: joinUrl(),
         addresses: join.all.map(a => ({ ...a, url: urlFor(a.address) })),
-        names: C().players, subtitle: C().subtitle, wifi: wifiInfo(C().wifi), reader: reader.state,
+        names: pastPlayers(), subtitle: C().subtitle, wifi: wifiInfo(C().wifi), reader: reader.state,
       }, { 'Cache-Control': 'no-cache' });
     }
     if (url === '/api/action' && req.method === 'POST') {

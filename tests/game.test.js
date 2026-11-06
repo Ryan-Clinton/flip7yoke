@@ -235,12 +235,12 @@ test('store: a write that fails is reported, keeps the old file, and clears on t
 test('config: bad values fall back to defaults with a note; duplicates and port clashes handled', () => {
   const { validate, DEFAULTS } = require('../lib/config.js');
   const { config, notes } = validate({
-    players: ['Ryan', ' ryan ', '', 'Gareth', 42], subtitle: '  Thursday  ',
+    players: ['Alex', 'Sam'], subtitle: '  Thursday  ',
     wifi: { ssid: 'Home', password: 'pw', auth: 'WPA3', showOnBoard: 'yes' },
     cardReader: { enabled: 'maybe', url: 'ftp://x' }, network: { address: '300.1.1.1' },
     ports: { main: 8080, also: 8080 },
   });
-  assert.deepStrictEqual(config.players, ['Ryan', 'Gareth']);
+  assert.strictEqual(config.players, undefined); // an older file's list is ignored, without a note
   assert.strictEqual(config.subtitle, 'Thursday');
   assert.strictEqual(config.wifi.auth, 'WPA');
   assert.strictEqual(config.wifi.showOnBoard, true);
@@ -259,31 +259,58 @@ test('config: broken JSON keeps the last good settings; .env moves into config.j
   const c = openConfig(dir, { log: () => {}, watch: false });
   assert.strictEqual(c.config.wifi.ssid, 'Home');
   assert.ok(fs.existsSync(path.join(dir, '.env.migrated')) && !fs.existsSync(path.join(dir, '.env')));
-  fs.writeFileSync(c.file, JSON.stringify({ players: ['Rita'] }));
-  assert.deepStrictEqual(c.reload().players, ['Rita']);
-  fs.writeFileSync(c.file, '{ "players": [ "Rita", }');
+  fs.writeFileSync(c.file, JSON.stringify({ subtitle: 'Friday' }));
+  assert.strictEqual(c.reload().subtitle, 'Friday');
+  fs.writeFileSync(c.file, '{ "subtitle": "Sat", }');
   c.reload();
   assert.match(c.error, /config\.json has an error/);
-  assert.deepStrictEqual(c.config.players, ['Rita']);
+  assert.strictEqual(c.config.subtitle, 'Friday');
 });
 
-test('server: names, subtitle and Wi-Fi come from config.json and change live; Wi-Fi only when shown on board', async () => {
+test('server: subtitle and Wi-Fi come from config.json and change live; Wi-Fi only when shown on board', async () => {
   const dir = tmpDir();
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Carlo'], subtitle: 'Friday', wifi: { ssid: 'Home', password: 'pw', showOnBoard: false } }));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Ignored'], subtitle: 'Friday', wifi: { ssid: 'Home', password: 'pw', showOnBoard: false } }));
   const g = await startGame(dir);
   try {
     let i = await (await fetch(g.url + '/api/info')).json();
-    assert.deepStrictEqual(i.names, ['Carlo']);
+    assert.deepStrictEqual(i.names, []); // no defaults: nobody has played yet
     assert.strictEqual(i.subtitle, 'Friday');
     assert.strictEqual(i.wifi, null);
     assert.strictEqual(i.reader, 'off');
     const before = (await getState(g.url)).configVersion;
-    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Carlo', 'Jarvis'], wifi: { ssid: 'Home', password: 'p;w' } }));
-    for (let n = 0; n < 40 && i.names.length < 2; n++) { await wait(100); i = await (await fetch(g.url + '/api/info')).json(); }
-    assert.deepStrictEqual(i.names, ['Carlo', 'Jarvis']);
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ subtitle: 'Saturday', wifi: { ssid: 'Home', password: 'p;w' } }));
+    for (let n = 0; n < 40 && i.subtitle !== 'Saturday'; n++) { await wait(100); i = await (await fetch(g.url + '/api/info')).json(); }
+    assert.strictEqual(i.subtitle, 'Saturday');
     // open pages are told: the version in every update goes up, so they fetch /api/info again
     assert.ok((await getState(g.url)).configVersion > before);
     assert.strictEqual(i.wifi.qr, String.raw`WIFI:T:WPA;S:Home;P:p\;w;;`);
+  } finally { await g.stop(); }
+});
+
+test('server: "Played before?" names are the people in saved games, newest game first, and update live', async () => {
+  const dir = tmpDir();
+  const g = await startGame(dir);
+  const names = async () => (await (await fetch(g.url + '/api/info')).json()).names;
+  const play = async who => {
+    const ids = [];
+    for (const name of who) ids.push((await post(g.url, 'addPlayer', { name })).body.id);
+    for (const id of ids) await post(g.url, 'setEntry', { id, entry: { cards: [5], mods: [] } });
+    for (let n = 0; n < 40 && !(await getState(g.url)).rounds.length; n++) await wait(100);
+    await post(g.url, 'newGame', {});
+  };
+  try {
+    assert.deepStrictEqual(await names(), []);
+    await play(['Alex', 'Sam']);
+    let v = (await getState(g.url)).configVersion;
+    assert.deepStrictEqual((await names()).sort(), ['Alex', 'Sam']);
+    await play(['alex', 'Sam', 'Jo']); // New game keeps the players; "alex" is the same player as Alex
+    assert.ok((await getState(g.url)).configVersion > v); // open phones fetch the names again
+    assert.deepStrictEqual((await names()).sort(), ['Alex', 'Jo', 'Sam']); // each name once
+    const h = await (await fetch(g.url + '/api/history')).json();
+    v = (await getState(g.url)).configVersion;
+    await post(g.url, 'deleteHistory', { id: h[0].id });
+    assert.deepStrictEqual((await names()).sort(), ['Alex', 'Sam']);
+    assert.ok((await getState(g.url)).configVersion > v);
   } finally { await g.stop(); }
 });
 

@@ -104,10 +104,10 @@ Post-Action ('{"type":"setEntry","id":"' + $b + '","entry":{"cards":[5,8],"mods"
 $done = Wait-Until { $x = Get-Api '/api/status'; if ($x.round -eq 2) { $x } } 15
 Check 'A4 a round finishes by itself' ([bool]$done) "round now $($done.round)"
 
-@{ players = @('Sandbox A', 'Sandbox B', 'Sandbox C'); subtitle = 'Sandbox night'; main = 7777; also = 80 } | ConvertTo-Json | Set-Content "$ResDir\settings-input.json" -Encoding ASCII
+@{ subtitle = 'Sandbox night'; main = 7777; also = 80 } | ConvertTo-Json | Set-Content "$ResDir\settings-input.json" -Encoding ASCII
 $out = (Invoke-Window 'selftest' @('-Out', "`"$ResDir\settings-input.json`"")).out
 $live = Wait-Until { $i = Get-Api '/api/info'; if ($i.subtitle -eq 'Sandbox night') { $i } } 10
-Check 'A5 Settings Save, applied live' ($out -eq 'SAVED' -and $live -and @($live.names).Count -eq 3) "selftest: $out; subtitle now '$($live.subtitle)', $(@($live.names).Count) names"
+Check 'A5 Settings Save, applied live' ($out -eq 'SAVED' -and $live) "selftest: $out; subtitle now '$($live.subtitle)'"
 
 $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""', "/LOG=`"$ResDir\setup-A6.log`"" -Wait -PassThru
 $stopped = -not (Running)

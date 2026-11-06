@@ -30,7 +30,7 @@ $Utf8 = New-Object System.Text.UTF8Encoding $false
 # ---- settings (config.json); the server checks every value too, this is the same set of defaults ----
 function Get-Config {
   $c = [ordered]@{
-    version = 1; players = @(); subtitle = ''
+    version = 1; subtitle = ''
     wifi = [ordered]@{ ssid = ''; password = ''; auth = 'WPA'; showOnBoard = $true }
     cardReader = [ordered]@{ enabled = 'auto'; model = 'qwen3-vl:4b-instruct'; url = 'http://127.0.0.1:11434' }
     network = [ordered]@{ address = 'auto' }
@@ -40,7 +40,7 @@ function Get-Config {
   if (Test-Path $ConfigFile) {
     try {
       $raw = [IO.File]::ReadAllText($ConfigFile) | ConvertFrom-Json
-      if ($raw.players) { $c.players = @($raw.players | ForEach-Object { [string]$_ }) }
+      # (An older file's "players" list is dropped on the next Save: the names come from saved games now.)
       if ($null -ne $raw.subtitle) { $c.subtitle = [string]$raw.subtitle }
       foreach ($sect in 'wifi', 'cardReader', 'network', 'ports') {
         if ($raw.$sect) { foreach ($k in @($c[$sect].Keys)) { if ($null -ne $raw.$sect.$k) { $c[$sect][$k] = $raw.$sect.$k } } }
@@ -553,7 +553,7 @@ function Get-WifiKey($ssid) {
 function Show-Settings($SnapshotPath, $AutoSave) {
   $c = Get-Config
   $f = New-Object System.Windows.Forms.Form
-  $f.Text = 'Flip7yoke settings'; $f.ClientSize = New-Object System.Drawing.Size(480, 600)
+  $f.Text = 'Flip7yoke settings'; $f.ClientSize = New-Object System.Drawing.Size(480, 460)
   $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false; $f.StartPosition = 'CenterParent'
   $f.BackColor = $navy; $f.ForeColor = $ink; $f.Font = New-Object System.Drawing.Font('Segoe UI', 10)
   $tb = {
@@ -564,31 +564,29 @@ function Show-Settings($SnapshotPath, $AutoSave) {
     $t.Text = $text; $f.Controls.Add($t); return $t
   }
 
-  New-Label 'PLAYERS (one per line, shown as "Played before? Tap your name")' 16 12 450 18 8 $true $muted $f | Out-Null
-  $players = & $tb 16 32 448 110 (($c.players) -join "`r`n") $true
-  New-Label 'SUBTITLE (under the name on the board)' 16 152 450 18 8 $true $muted $f | Out-Null
-  $sub = & $tb 16 172 448 26 ([string]$c.subtitle)
+  New-Label 'SUBTITLE (under the name on the board)' 16 12 450 18 8 $true $muted $f | Out-Null
+  $sub = & $tb 16 32 448 26 ([string]$c.subtitle)
 
-  New-Label 'WI-FI QR ON THE BOARD' 16 210 450 18 8 $true $muted $f | Out-Null
-  New-Label 'Network' 16 234 80 22 10 $false $ink $f | Out-Null
-  $ssid = & $tb 100 232 250 26 ([string]$c.wifi.ssid)
-  $detect = New-Button 'Detect' 358 231 106 28 $panel $ink $f; $detect.Font = $form.Font
-  New-Label 'Password' 16 268 80 22 10 $false $ink $f | Out-Null
-  $pw = & $tb 100 266 250 26 ([string]$c.wifi.password)
-  $readKey = New-Button 'From Windows' 358 265 106 28 $panel $ink $f; $readKey.Font = $form.Font
+  New-Label 'WI-FI QR ON THE BOARD' 16 70 450 18 8 $true $muted $f | Out-Null
+  New-Label 'Network' 16 94 80 22 10 $false $ink $f | Out-Null
+  $ssid = & $tb 100 92 250 26 ([string]$c.wifi.ssid)
+  $detect = New-Button 'Detect' 358 91 106 28 $panel $ink $f; $detect.Font = $form.Font
+  New-Label 'Password' 16 128 80 22 10 $false $ink $f | Out-Null
+  $pw = & $tb 100 126 250 26 ([string]$c.wifi.password)
+  $readKey = New-Button 'From Windows' 358 125 106 28 $panel $ink $f; $readKey.Font = $form.Font
   $show = New-Object System.Windows.Forms.CheckBox
   $show.Text = 'Show the network and password on the board'; $show.Checked = [bool]$c.wifi.showOnBoard
-  $show.Location = New-Object System.Drawing.Point(16, 298); $show.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($show)
-  $wifiNote = New-Label 'When ticked, every phone that opens the game is sent the password too (that is how the QR works).' 16 322 448 34 8 $false $muted $f
+  $show.Location = New-Object System.Drawing.Point(16, 158); $show.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($show)
+  $wifiNote = New-Label 'When ticked, every phone that opens the game is sent the password too (that is how the QR works).' 16 182 448 34 8 $false $muted $f
 
-  New-Label 'CARD READER' 16 362 450 18 8 $true $muted $f | Out-Null
+  New-Label 'CARD READER' 16 222 450 18 8 $true $muted $f | Out-Null
   $reader = New-Object System.Windows.Forms.CheckBox
   $reader.Text = 'Use the card reader (camera button on phones; needs Ollama)'; $reader.Checked = ($c.cardReader.enabled -ne $false)
-  $reader.Location = New-Object System.Drawing.Point(16, 382); $reader.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($reader)
+  $reader.Location = New-Object System.Drawing.Point(16, 242); $reader.Size = New-Object System.Drawing.Size(448, 24); $f.Controls.Add($reader)
 
-  New-Label 'JOIN ADDRESS (the one in the QR code)' 16 414 450 18 8 $true $muted $f | Out-Null
+  New-Label 'JOIN ADDRESS (the one in the QR code)' 16 274 450 18 8 $true $muted $f | Out-Null
   $addr = New-Object System.Windows.Forms.ComboBox
-  $addr.DropDownStyle = 'DropDownList'; $addr.Location = New-Object System.Drawing.Point(16, 434); $addr.Size = New-Object System.Drawing.Size(448, 26)
+  $addr.DropDownStyle = 'DropDownList'; $addr.Location = New-Object System.Drawing.Point(16, 294); $addr.Size = New-Object System.Drawing.Size(448, 26)
   [void]$addr.Items.Add('Automatic')
   $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' })
   foreach ($ip in $ips) { [void]$addr.Items.Add("$($ip.IPAddress)  ($($ip.InterfaceAlias))") }
@@ -596,15 +594,15 @@ function Show-Settings($SnapshotPath, $AutoSave) {
   for ($i = 1; $i -lt $addr.Items.Count; $i++) { if ($addr.Items[$i] -like "$($c.network.address) *") { $addr.SelectedIndex = $i } }
   $f.Controls.Add($addr)
 
-  New-Label 'PORTS' 16 472 80 18 8 $true $muted $f | Out-Null
-  New-Label 'Main' 16 494 40 22 10 $false $ink $f | Out-Null
-  $pMain = & $tb 60 492 80 26 ([string]$c.ports.main)
-  New-Label 'Also (0 = off)' 160 494 100 22 10 $false $ink $f | Out-Null
-  $pAlso = & $tb 262 492 80 26 ([string]$c.ports.also)
-  New-Label 'Join address, ports and the card reader connection apply on the next Start.' 16 524 448 20 8 $false $muted $f | Out-Null
+  New-Label 'PORTS' 16 332 80 18 8 $true $muted $f | Out-Null
+  New-Label 'Main' 16 354 40 22 10 $false $ink $f | Out-Null
+  $pMain = & $tb 60 352 80 26 ([string]$c.ports.main)
+  New-Label 'Also (0 = off)' 160 354 100 22 10 $false $ink $f | Out-Null
+  $pAlso = & $tb 262 352 80 26 ([string]$c.ports.also)
+  New-Label 'Join address, ports and the card reader connection apply on the next Start.' 16 384 448 20 8 $false $muted $f | Out-Null
 
-  $save = New-Button 'Save' 254 556 100 34 $green $navy $f
-  $cancel = New-Button 'Cancel' 364 556 100 34 $panel $ink $f
+  $save = New-Button 'Save' 254 416 100 34 $green $navy $f
+  $cancel = New-Button 'Cancel' 364 416 100 34 $panel $ink $f
   $cancel.Add_Click({ $f.Close() })
   $detect.Add_Click({
     $n = Get-WifiNow
@@ -618,13 +616,6 @@ function Show-Settings($SnapshotPath, $AutoSave) {
   $save.Add_Click({
     # Same checks as the server, so mistakes never reach the file.
     $problems = @()
-    $names = @(); $seen = @{}
-    foreach ($n in ($players.Text -split "`r?`n")) {
-      $n = $n.Trim(); if ($n.Length -gt 20) { $n = $n.Substring(0, 20) }
-      if (-not $n) { continue }
-      if ($seen.ContainsKey($n.ToLower())) { $problems += "'$n' is listed twice."; continue }
-      $seen[$n.ToLower()] = $true; $names += $n
-    }
     $m = 0; $a = 0
     if (-not [int]::TryParse($pMain.Text.Trim(), [ref]$m) -or $m -lt 1 -or $m -gt 65535) { $problems += 'Main port must be a whole number from 1 to 65535.' }
     if (-not [int]::TryParse($pAlso.Text.Trim(), [ref]$a) -or $a -lt 0 -or $a -gt 65535) { $problems += 'Also port must be 0 (off) or a whole number from 1 to 65535.' }
@@ -637,7 +628,6 @@ function Show-Settings($SnapshotPath, $AutoSave) {
       [System.Windows.Forms.MessageBox]::Show($f, ($problems -join "`r`n"), 'Flip7yoke settings') | Out-Null; return
     }
 
-    $c.players = @($names)
     $c.subtitle = $sub.Text.Trim()
     $c.wifi.ssid = $ssid.Text; $c.wifi.password = $pw.Text; $c.wifi.showOnBoard = $show.Checked
     $c.cardReader.enabled = if ($reader.Checked) { 'auto' } else { $false }
@@ -649,7 +639,6 @@ function Show-Settings($SnapshotPath, $AutoSave) {
   if ($SnapshotPath) { Save-Snapshot $f $SnapshotPath; $f.Dispose(); return }
   if ($AutoSave) {
     Show-OffScreen $f
-    if ($AutoSave.ContainsKey('players')) { $players.Text = ($AutoSave.players -join "`r`n") }
     if ($AutoSave.ContainsKey('subtitle')) { $sub.Text = $AutoSave.subtitle }
     if ($AutoSave.ContainsKey('ssid')) { $ssid.Text = $AutoSave.ssid }
     if ($AutoSave.ContainsKey('password')) { $pw.Text = $AutoSave.password }
@@ -694,7 +683,7 @@ if ($Action -eq 'snapshot') {
 }
 
 if ($Action -eq 'selftest') {
-  # $Out is a JSON file of field values, e.g. {"players":["A","B"],"main":7790,"also":0}.
+  # $Out is a JSON file of field values, e.g. {"subtitle":"Friday","main":7790,"also":0}.
   $vals = @{}
   ([IO.File]::ReadAllText($Out) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $vals[$_.Name] = $_.Value }
   Show-Settings $null $vals

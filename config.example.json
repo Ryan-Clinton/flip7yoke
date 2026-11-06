@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "players": ["Alex", "Sam", "Jo"],
   "subtitle": "Game night",
   "wifi": { "ssid": "", "password": "", "auth": "WPA", "showOnBoard": true },
   "cardReader": { "enabled": "auto", "model": "qwen3-vl:4b-instruct", "url": "http://127.0.0.1:11434" },

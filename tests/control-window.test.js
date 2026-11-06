@@ -22,10 +22,12 @@ function selftest(dir, values) {
 
 test('Settings Save writes config.json that the server accepts as is', { skip: process.platform !== 'win32' }, () => {
   const dir = tmpDir();
-  const r = selftest(dir, { players: ['Ryan', 'Rita'], subtitle: 'Friday', ssid: 'Home', password: 'pw', showOnBoard: false, reader: false, main: 7790, also: 0 });
+  // An older file's players list is dropped on Save: the names offered come from saved games.
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Alex', 'Sam'], subtitle: 'Old' }));
+  const r = selftest(dir, { subtitle: 'Friday', ssid: 'Home', password: 'pw', showOnBoard: false, reader: false, main: 7790, also: 0 });
   assert.deepStrictEqual(r, { code: 0, out: 'SAVED' });
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-  assert.deepStrictEqual(saved.players, ['Ryan', 'Rita']); // a list even with PowerShell 5.1's JSON
+  assert.strictEqual(saved.players, undefined);
   assert.strictEqual(saved.subtitle, 'Friday');
   assert.deepStrictEqual(saved.wifi, { ssid: 'Home', password: 'pw', auth: 'WPA', showOnBoard: false });
   assert.strictEqual(saved.cardReader.enabled, false);
@@ -33,10 +35,10 @@ test('Settings Save writes config.json that the server accepts as is', { skip: p
   const { validate } = require('../lib/config.js');
   assert.deepStrictEqual(validate(saved).notes, []); // nothing the server would have to correct
 
-  const one = selftest(dir, { players: ['Solo'] });
-  assert.strictEqual(one.code, 0);
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).players, ['Solo']);
-  assert.ok(fs.existsSync(path.join(dir, 'config.json.bak')));
+  const again = selftest(dir, { subtitle: 'Saturday' });
+  assert.strictEqual(again.code, 0);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).subtitle, 'Saturday');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json.bak'), 'utf8')).subtitle, 'Friday');
 });
 
 // An installed copy: the exe and a version-stamped Flip7yoke.ps1 side by side, as the installer lays them out.
@@ -83,12 +85,11 @@ test('installed copy with its record missing: status still sees it, Stop ends it
   assert.strictEqual(ps(copy, 'stop').code, 0); // nothing left: a clean "stopped"
 });
 
-test('Settings Save refuses duplicate names and clashing ports, and leaves the file alone', { skip: process.platform !== 'win32' }, () => {
+test('Settings Save refuses clashing ports, and leaves the file alone', { skip: process.platform !== 'win32' }, () => {
   const dir = tmpDir();
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ players: ['Keep'] }));
-  const r = selftest(dir, { players: ['Ryan', 'ryan'], main: 8000, also: 8000 });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ subtitle: 'Keep' }));
+  const r = selftest(dir, { subtitle: 'Changed', main: 8000, also: 8000 });
   assert.strictEqual(r.code, 1);
-  assert.match(r.out, /listed twice/);
   assert.match(r.out, /must be different/);
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).players, ['Keep']);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).subtitle, 'Keep');
 });

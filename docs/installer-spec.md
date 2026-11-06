@@ -140,8 +140,7 @@ Replaces `.env` and the hard-coded values.
 ```json
 {
   "version": 1,
-  "players": ["Ryan", "Gareth", "Rossi"],
-  "subtitle": "Thursday game night",
+  "subtitle": "Game night",
   "wifi": { "ssid": "", "password": "", "auth": "WPA", "showOnBoard": true },
   "cardReader": { "enabled": "auto", "model": "qwen3-vl:4b-instruct", "url": "http://127.0.0.1:11434" },
   "network": { "address": "auto" },
@@ -155,7 +154,7 @@ Replaces `.env` and the hard-coded values.
 
 | Setting | Takes effect |
 |---|---|
-| `players`, `subtitle`, `wifi` | Live: the server re-reads `config.json` when it changes (`fs.watchFile` polling). **As built (audit round 4):** every update on `/events` carries a `configVersion` that goes up on each reload. Open pages fetch `/api/info` again when it changes, so names, subtitle, Wi-Fi and the join address update on a board that's already open. Checked in Chrome |
+| `subtitle`, `wifi` | Live: the server re-reads `config.json` when it changes (`fs.watchFile` polling). **As built (audit round 4):** every update on `/events` carries a `configVersion` that goes up on each reload. Open pages fetch `/api/info` again when it changes, so names, subtitle, Wi-Fi and the join address update on a board that's already open. Checked in Chrome |
 | `cardReader.enabled` | Live: switching it on runs a readiness check, switching it off hides the camera |
 | `cardReader.model`, `cardReader.url`, `network.address`, `ports` | On the next Start. The Settings panel says "Restart to apply" and offers a Restart button |
 
@@ -164,13 +163,14 @@ Replaces `.env` and the hard-coded values.
 - Bad JSON: keep running on the last good settings (or defaults on first start), log the line and column, and show "Settings file has an error" in the control window. The bad file is left alone for the user to fix or reset from Settings.
 - Bad values are replaced by their default, with a note in the log:
   - Ports must be whole numbers 1 to 65535, and `main` and `also` must differ (`also: 0` means off).
-  - Player names are trimmed and checked for duplicates case-insensitively, and blanks are dropped.
   - The card-reader URL must be `http://` or `https://`.
 - The Settings panel runs the same checks before saving, so most mistakes never reach the file.
 
 **Field notes:**
 
-- `players` replaces `REGULARS` in `server.js` (line 47). A new install starts empty, so the phone page asks for a name.
+- **No names setting (changed 6 Nov 2026, Ryan's call):** "Played before? Tap your name" lists everyone in a saved game, from the most recent game back, each name once. A new install has none, so the phone page asks for a name.
+  - The names replace `REGULARS` in `server.js` and the earlier `players` setting. An older `config.json` with `players` still loads; the list is ignored and dropped on the next Settings save.
+  - Saving or deleting a game bumps `configVersion`, so open phones fetch the names again.
 - `subtitle` replaces the "Thursday game night" text in `public/index.html`. It's served through `/api/info`, not baked into the page.
 - `config.json` is gitignored. The repo ships `config.example.json` with no personal data.
 - When it's written (by Settings or a migration), the previous copy is kept as `config.json.bak`.
@@ -542,7 +542,7 @@ Run on a Windows 11 VM with no Node or Ollama, unless a line says otherwise.
 - `LICENSE` (MIT), plus OFL for Big Shoulders and Barlow and MIT for qrcode-generator 1.4.4.
 - Disclaimer on the board footer, the README and the installer's first page: "Unofficial score keeper for Flip 7. Not affiliated with The Op." Our own design, with no card art from the published game.
 - The build produces `dist\Flip7yoke-Setup-<version>.exe` and its SHA-256, uploaded to GitHub Releases.
-- **Ask Ryan before making the repo or a release public.** Consider a fresh single-commit public repo. The only personal data in code today is `REGULARS`, which Stage 2 removes.
+- **Ask Ryan before making the repo or a release public.** Checked 6 Nov 2026: no Wi-Fi details, email, scores, photos or saved games anywhere in the history. Friends' first names appear in old code and as test data.
 
 ### Code signing
 
@@ -551,6 +551,5 @@ Later, if it's shared beyond friends: Azure Trusted Signing (about $10 a month).
 ## Open questions for Ryan
 
 - Name on the Start menu and installer: "Flip7yoke"?
-- Should a new install start with no players, or with example names?
 - Should the desktop shortcut be ticked by default? (Spec assumes yes.)
 - **Host PIN:** should New game, Delete history and Remove player need a PIN typed on the phone? Recommendation: no, at least for the friends release. Anyone at the table can already fix scores, the server is only reachable on Private networks, and the Host check covers the web-page route. A PIN adds a step on game night to guard against your own friends.
